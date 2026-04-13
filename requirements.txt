@@ -1,0 +1,13 @@
+newspaper3k
+beautifulsoup4
+spacy
+sentence-transformers
+scikit-learn
+nltk
+textblob
+torch
+transformers
+flask
+requests
+lxml
+lxml_html_clean

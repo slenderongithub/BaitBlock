@@ -1,0 +1,17 @@
+actual,predicted,count
+Clickbait,Clickbait,38
+Clickbait,Sensationalist,5
+Clickbait,Borderline,2
+Clickbait,Legitimate,1
+Sensationalist,Clickbait,6
+Sensationalist,Sensationalist,29
+Sensationalist,Borderline,7
+Sensationalist,Legitimate,2
+Borderline,Clickbait,2
+Borderline,Sensationalist,8
+Borderline,Borderline,31
+Borderline,Legitimate,6
+Legitimate,Clickbait,0
+Legitimate,Sensationalist,2
+Legitimate,Borderline,4
+Legitimate,Legitimate,41

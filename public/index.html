@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>BaitBlock | Clickbait Detector</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet" />
+	<link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+	<main class="page-shell">
+		<section class="hero-card brutal-card">
+			<p class="hero-tag">Truth Check Engine</p>
+			<h1>BaitBlock</h1>
+			<p class="hero-copy">
+				Paste a news article link and get a fast estimate of whether the headline is likely
+				clickbait or deceptive.
+			</p>
+			<span class="sticker">No hype, just signals</span>
+		</section>
+
+		<section class="input-card brutal-card">
+			<label for="articleUrl">Article URL</label>
+			<div class="input-row">
+				<input id="articleUrl" type="url" placeholder="https://example.com/news-story" autocomplete="off" />
+				<button id="analyzeBtn" type="button">Analyze</button>
+			</div>
+			<p id="statusText" class="status-text">Ready when you are.</p>
+		</section>
+
+		<section id="resultCard" class="result-card brutal-card hidden" aria-live="polite">
+			<div class="result-header">
+				<h2 id="resultLabel">Result</h2>
+				<div class="score-stack">
+					<span id="resultScore" class="score-pill">0%</span>
+					<span id="confidenceScore" class="confidence-pill">100%</span>
+				</div>
+			</div>
+			<p id="resultSummary" class="result-summary"></p>
+
+			<div class="result-grid">
+				<article class="detail-box">
+					<h3>Detected Headline</h3>
+					<p id="headlineText">-</p>
+				</article>
+				<article class="detail-box">
+					<h3>Article Context</h3>
+					<div id="articleInfoList" class="tag-cloud"></div>
+				</article>
+				<article class="detail-box">
+					<h3>NLP Metrics</h3>
+					<div id="metricsList" class="tag-cloud"></div>
+				</article>
+				<article class="detail-box">
+					<h3>Score Breakdown</h3>
+					<div id="breakdownList" class="tag-cloud"></div>
+				</article>
+				<article class="detail-box">
+					<h3>Top Signals</h3>
+					<div id="signalsList" class="tag-cloud"></div>
+				</article>
+				<article class="detail-box">
+					<h3>Body Snippet</h3>
+					<p id="bodySnippetText">-</p>
+				</article>
+				<article class="detail-box">
+					<h3>Key Phrases & Entities</h3>
+					<div id="intelList" class="tag-cloud"></div>
+				</article>
+				<article class="detail-box tag-panel">
+					<h3>Entity Groups</h3>
+					<div id="entityGroupList" class="group-stack"></div>
+				</article>
+				<article class="detail-box tag-panel full-width">
+					<h3>Supporting Sentences</h3>
+					<div id="supportingSentenceList" class="sentence-stack"></div>
+				</article>
+			</div>
+
+			<p class="note">
+				This is a heuristic estimate, not a final fact-check verdict. Use it as a warning signal.
+			</p>
+		</section>
+	</main>
+
+	<script src="./script.js"></script>
+</body>
+</html>

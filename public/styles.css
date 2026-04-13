@@ -1,0 +1,378 @@
+:root {
+  --bg: #f8f6e7;
+  --ink: #111111;
+  --teal: #34d1bf;
+  --red: #ff4d6d;
+  --yellow: #ffd23f;
+  --white: #ffffff;
+  --good: #1f9d55;
+  --warn: #d97706;
+  --bad: #d11a2a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Space Grotesk", sans-serif;
+  color: var(--ink);
+  background:
+    linear-gradient(0deg, rgba(0, 0, 0, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.08) 1px, transparent 1px),
+    radial-gradient(circle at 12% 18%, #ffe6a7 0 20%, transparent 21%),
+    radial-gradient(circle at 88% 78%, #b8f2e6 0 16%, transparent 17%),
+    var(--bg);
+  background-size: 26px 26px, 26px 26px, 100% 100%, 100% 100%, 100% 100%;
+}
+
+.page-shell {
+  width: min(940px, calc(100% - 2rem));
+  margin: 1.2rem auto 2.2rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.brutal-card {
+  background: var(--white);
+  border: 4px solid var(--ink);
+  border-radius: 18px;
+  box-shadow: 8px 8px 0 var(--ink);
+}
+
+.hero-card {
+  position: relative;
+  padding: 1.1rem 1.2rem 1.3rem;
+  overflow: hidden;
+}
+
+.hero-tag {
+  display: inline-flex;
+  margin: 0 0 0.5rem;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  background: var(--yellow);
+  padding: 0.2rem 0.5rem;
+  border: 3px solid var(--ink);
+  border-radius: 999px;
+}
+
+h1 {
+  margin: 0;
+  font-family: "Archivo Black", sans-serif;
+  font-size: clamp(2rem, 7vw, 3.2rem);
+  line-height: 1;
+  letter-spacing: 0.01em;
+}
+
+.hero-copy {
+  margin: 0.7rem 0 0;
+  max-width: 60ch;
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+.sticker {
+  position: absolute;
+  right: 1rem;
+  top: 1rem;
+  transform: rotate(4deg);
+  background: var(--teal);
+  border: 3px solid var(--ink);
+  border-radius: 12px;
+  padding: 0.28rem 0.56rem;
+  font-weight: 700;
+}
+
+.input-card {
+  padding: 1rem 1.1rem;
+}
+
+.input-card label {
+  display: block;
+  font-size: 0.94rem;
+  font-weight: 700;
+  margin-bottom: 0.55rem;
+}
+
+.input-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.56rem;
+}
+
+input {
+  width: 100%;
+  min-height: 54px;
+  border: 3px solid var(--ink);
+  border-radius: 12px;
+  padding: 0 0.9rem;
+  font: inherit;
+  font-size: 1rem;
+  outline: none;
+}
+
+input:focus {
+  box-shadow: 0 0 0 3px rgba(52, 209, 191, 0.35);
+}
+
+button {
+  min-height: 54px;
+  border: 3px solid var(--ink);
+  border-radius: 12px;
+  background: var(--red);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  padding: 0 1rem;
+  cursor: pointer;
+  box-shadow: 4px 4px 0 var(--ink);
+}
+
+button:active {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 var(--ink);
+}
+
+.status-text {
+  margin: 0.7rem 0 0;
+  font-size: 0.93rem;
+}
+
+.result-card {
+  padding: 1rem 1.1rem;
+}
+
+.hidden {
+  display: none;
+}
+
+.result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.score-stack {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.result-header h2 {
+  margin: 0;
+  font-family: "Archivo Black", sans-serif;
+  font-size: clamp(1.3rem, 4vw, 1.8rem);
+  line-height: 1;
+}
+
+.score-pill {
+  border: 3px solid var(--ink);
+  border-radius: 999px;
+  padding: 0.24rem 0.64rem;
+  background: var(--yellow);
+  font-weight: 700;
+}
+
+.confidence-pill {
+  border: 3px solid var(--ink);
+  border-radius: 999px;
+  padding: 0.24rem 0.64rem;
+  background: #b8f2e6;
+  font-weight: 700;
+}
+
+.result-summary {
+  margin: 0.62rem 0 0;
+  line-height: 1.45;
+  font-weight: 600;
+}
+
+.result-grid {
+  margin-top: 0.9rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.metrics-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  line-height: 1.45;
+}
+
+.tag-cloud,
+.group-stack,
+.sentence-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.tag-chip,
+.group-card,
+.sentence-card {
+  border: 3px solid var(--ink);
+  border-radius: 999px;
+  background: #e8edf7;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.92rem;
+  font-weight: 700;
+  box-shadow: 3px 3px 0 var(--ink);
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.35;
+}
+
+.tag-chip.is-label {
+  background: var(--yellow);
+}
+
+.tag-chip.is-entity {
+  background: #d9f4ff;
+}
+
+.tag-chip.is-keyword {
+  background: #fce2ff;
+}
+
+.tag-chip.is-block {
+  width: 100%;
+  border-radius: 999px;
+  padding: 0.8rem 1rem;
+  align-items: center;
+  justify-content: flex-start;
+  white-space: normal;
+  text-wrap: pretty;
+}
+
+.tag-chip.is-metric {
+  background: #edf3ff;
+}
+
+.tag-chip.is-signal {
+  background: #ffced5;
+}
+
+.tag-panel {
+  align-self: start;
+}
+
+.tag-panel.full-width {
+  grid-column: 1 / -1;
+}
+
+.group-stack {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.group-card {
+  border-radius: 16px;
+  background: #f5f9ff;
+  padding: 0.65rem 0.7rem 0.75rem;
+}
+
+.group-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.45rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.78rem;
+  padding: 0.18rem 0.42rem;
+  border-radius: 999px;
+  border: 2px solid var(--ink);
+  background: var(--yellow);
+}
+
+.sentence-stack {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.sentence-card {
+  border-radius: 16px;
+  background: #fff8dc;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+#bodySnippetText {
+  line-height: 1.45;
+}
+
+.detail-box {
+  border: 3px solid var(--ink);
+  border-radius: 12px;
+  padding: 0.72rem;
+  background: #f9fafb;
+}
+
+.detail-box h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.detail-box p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+#signalsList {
+  margin: 0;
+}
+
+.tag-cloud .tag-chip,
+.tag-cloud .group-card,
+.tag-cloud .sentence-card {
+  margin: 0;
+}
+
+.note {
+  margin: 0.9rem 0 0;
+  font-size: 0.86rem;
+}
+
+.result-card.safe .score-pill {
+  background: #b8f2e6;
+}
+
+.result-card.warning .score-pill {
+  background: #ffd79f;
+}
+
+.result-card.risky .score-pill {
+  background: #ffb3b3;
+}
+
+@media (max-width: 740px) {
+  .result-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .input-row {
+    grid-template-columns: 1fr;
+  }
+
+  button {
+    width: 100%;
+  }
+
+  .sticker {
+    position: static;
+    display: inline-flex;
+    margin-top: 0.6rem;
+    transform: none;
+  }
+}
