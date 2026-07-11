@@ -106,7 +106,7 @@ ClickbaitDetection/
   tests/             node:test — scoring, ssrf, analyze, api, frontend (jsdom)
   app.py             Python NLP engine (Flask)
   requirements.txt   pinned Python deps
-  .github/           CI (lint + format + test on Node 18/20/22) + Dependabot
+  .github/           CI (lint + format + test on Node 20/22) + Dependabot
   docs/              full documentation set
 ```
 

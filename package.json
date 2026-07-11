@@ -4,7 +4,7 @@
   "description": "Web app that estimates whether a news article link is clickbait/deceptive using explainable heuristic signals.",
   "main": "src/server.js",
   "engines": {
-    "node": ">=18"
+    "node": ">=20.18.1"
   },
   "scripts": {
     "start": "node src/server.js",
