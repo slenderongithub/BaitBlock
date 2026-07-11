@@ -1,0 +1,10 @@
+node_modules/
+.venv/
+.cache/
+.code-review-graph/
+.claude/
+package-lock.json
+*.py
+*.csv
+*.png
+**/*.md

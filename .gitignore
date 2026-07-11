@@ -6,3 +6,10 @@ __pycache__/
 *.pyd
 *.DS_Store
 node_modules/
+
+# Local environment / secrets
+.env
+.env.local
+
+# Code-graph MCP tool cache (local only)
+.code-review-graph/

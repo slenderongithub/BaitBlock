@@ -1,0 +1,68 @@
+# Render Blueprint — deploys the Node engine (src/server.js) as a persistent web service.
+#
+# Deploy: push this repo to GitHub, then in Render: New -> Blueprint -> select the repo.
+# Render reads this file automatically and provisions the service below.
+#
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: baitblock
+    runtime: node
+    plan: free # switch to "starter" ($7/mo) to remove idle spin-down + get more RAM
+    region: oregon # pick the region closest to you; see render.com/docs/regions
+
+    # `--with-deps` installs the OS-level libraries Chromium needs on Render's build image,
+    # not just the browser binary itself. Required for the Tier-2 headless acquisition tier.
+    buildCommand: npm install && npx playwright install --with-deps chromium
+    startCommand: npm start
+
+    healthCheckPath: /healthz
+
+    envVars:
+      # PORT is auto-injected by Render — do not set it here, config.js reads process.env.PORT.
+      - key: NODE_VERSION
+        value: "20"
+
+      # --- SSRF policy: MUST stay 0/unset for any internet-facing deployment ---
+      - key: CLICKBAIT_ALLOW_PRIVATE
+        value: "0"
+
+      # --- Outbound fetch safety ---
+      - key: CLICKBAIT_FETCH_TIMEOUT_MS
+        value: "15000"
+      - key: CLICKBAIT_FETCH_MAX_BYTES
+        value: "5242880"
+      - key: CLICKBAIT_FETCH_MAX_REDIRECTS
+        value: "5"
+
+      # --- Rate limiting (per client IP) ---
+      - key: CLICKBAIT_RATE_WINDOW_MS
+        value: "60000"
+      - key: CLICKBAIT_RATE_MAX
+        value: "20"
+
+      # --- Tiered acquisition ---
+      - key: CLICKBAIT_RESPECT_ROBOTS
+        value: "1"
+      - key: CLICKBAIT_MIN_BODY_WORDS
+        value: "60"
+      - key: CLICKBAIT_DOMAIN_MIN_INTERVAL_MS
+        value: "1000"
+      - key: CLICKBAIT_CACHE_TTL_MS
+        value: "900000"
+      - key: CLICKBAIT_CACHE_MAX
+        value: "200"
+      - key: CLICKBAIT_ARCHIVE_FALLBACK
+        value: "1"
+
+      # --- Tier 2: headless browser ---
+      # Free tier has only 512MB RAM, which is tight alongside Chromium. If you see the
+      # service crash/restart under load, set this to "0" first — you keep direct HTTP,
+      # AMP/RSS, and the Wayback archive fallback, just lose JS-rendered-page coverage.
+      - key: CLICKBAIT_HEADLESS
+        value: "1"
+      - key: CLICKBAIT_HEADLESS_TIMEOUT_MS
+        value: "20000"
+      - key: CLICKBAIT_HEADLESS_NETWORKIDLE_MS
+        value: "3000"

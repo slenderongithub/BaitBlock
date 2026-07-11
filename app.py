@@ -1,5 +1,7 @@
 import re
 import os
+import socket
+import ipaddress
 import hashlib
 import math
 import logging
@@ -7,6 +9,7 @@ import warnings
 from collections import Counter
 from functools import lru_cache
 from typing import Dict, List, Tuple
+from urllib.parse import urlparse
 
 os.environ.setdefault("TRANSFORMERS_NO_TORCHVISION", "1")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
@@ -17,18 +20,40 @@ import requests
 import spacy
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request, send_from_directory
-from newspaper import Article
-from requests.exceptions import SSLError
+from newspaper import Article, Config as NewspaperConfig
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from nltk.sentiment import SentimentIntensityAnalyzer
 from textblob import TextBlob
 
-requests.packages.urllib3.disable_warnings()  # type: ignore[attr-defined]
-
 APP_PORT = int(os.environ.get("PORT", "3000"))
 SIMILARITY_GAP_THRESHOLD = 0.35
 SENTIMENT_MAG_THRESHOLD = 0.5
+
+# Directory holding the browser assets (index.html, script.js, styles.css).
+# The original code pointed Flask at the repo root, where index.html does not
+# exist, so the UI 404'd. It now correctly points at ./public.
+PUBLIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "public")
+
+# Sentence-transformer model for semantic similarity. Upgraded default:
+# all-mpnet-base-v2 (768-dim, much stronger STS than the old all-MiniLM-L6-v2).
+# Override with CLICKBAIT_EMBEDDING_MODEL (e.g. BAAI/bge-small-en-v1.5).
+EMBEDDING_MODEL = os.environ.get(
+    "CLICKBAIT_EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2"
+)
+
+# Outbound-fetch safety (parity with the Node backend).
+FETCH_TIMEOUT_SECONDS = int(os.environ.get("CLICKBAIT_FETCH_TIMEOUT_MS", "15000")) // 1000
+FETCH_MAX_BYTES = int(os.environ.get("CLICKBAIT_FETCH_MAX_BYTES", str(5 * 1024 * 1024)))
+ALLOW_PRIVATE = os.environ.get("CLICKBAIT_ALLOW_PRIVATE", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+ALLOWED_CONTENT_TYPES = {"text/html", "application/xhtml+xml"}
+USER_AGENT = "Mozilla/5.0 (compatible; BaitBlock/1.0; +https://github.com/)"
+
 MODEL_CACHE_DIR = os.environ.get(
     "CLICKBAIT_MODEL_CACHE", os.path.join(os.path.dirname(__file__), ".cache", "huggingface")
 )
@@ -42,7 +67,68 @@ warnings.filterwarnings(
 for noisy_logger in ("transformers", "sentence_transformers", "huggingface_hub"):
     logging.getLogger(noisy_logger).setLevel(logging.ERROR)
 
-app = Flask(__name__, static_folder=".", static_url_path="")
+app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path="")
+
+
+def _is_public_ip(ip_str: str) -> bool:
+    """True only for globally-routable unicast addresses."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+def assert_url_allowed(url: str) -> None:
+    """SSRF guard: reject non-http(s) and private/reserved destinations.
+
+    Mirrors the Node ssrfGuard so both engines refuse to fetch internal hosts
+    (localhost, RFC1918, the 169.254.169.254 metadata endpoint, etc.).
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Only http and https URLs are supported.")
+
+    if ALLOW_PRIVATE:
+        return
+
+    host = (parsed.hostname or "").lower()
+    if (
+        host in {"localhost", "metadata.google.internal"}
+        or host.endswith(".localhost")
+        or host.endswith(".local")
+    ):
+        raise ValueError("Refusing to fetch an internal or reserved hostname.")
+
+    host_is_ip = True
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        host_is_ip = False
+
+    if host_is_ip:
+        if not _is_public_ip(host):
+            raise ValueError("Refusing to fetch a private or reserved address.")
+        return
+
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        raise ValueError("Could not resolve the host for that URL.") from exc
+
+    for info in infos:
+        address = info[4][0].split("%")[0]
+        if not _is_public_ip(address):
+            raise ValueError("Refusing to fetch a private or reserved address.")
 
 
 def normalize_whitespace(text: str) -> str:
@@ -66,7 +152,7 @@ def get_nlp():
 @lru_cache(maxsize=1)
 def get_sbert_model():
     try:
-        return SentenceTransformer("all-MiniLM-L6-v2")
+        return SentenceTransformer(EMBEDDING_MODEL)
     except Exception:
         return None
 
@@ -79,8 +165,16 @@ def get_sentiment_model():
         return None
 
 
+def _newspaper_config() -> NewspaperConfig:
+    cfg = NewspaperConfig()
+    cfg.browser_user_agent = USER_AGENT
+    cfg.request_timeout = FETCH_TIMEOUT_SECONDS
+    cfg.fetch_images = False
+    return cfg
+
+
 def scrape_with_newspaper(url: str) -> Dict:
-    article = Article(url)
+    article = Article(url, config=_newspaper_config())
     article.download()
     article.parse()
     return {
@@ -94,22 +188,34 @@ def scrape_with_newspaper(url: str) -> Dict:
 
 
 def scrape_with_bs4(url: str) -> Dict:
-    request_kwargs = {
-        "headers": {
-            "User-Agent": "Mozilla/5.0 (ClickbaitDetectorNLP/1.0)",
+    # TLS verification is intentionally left ON. The original code silently
+    # retried with verify=False on SSLError, which defeats transport security.
+    response = requests.get(
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
             "Accept": "text/html,application/xhtml+xml",
         },
-        "timeout": 20,
-    }
-
-    try:
-        response = requests.get(url, **request_kwargs)
-    except SSLError:
-        response = requests.get(url, verify=False, **request_kwargs)
-
+        timeout=FETCH_TIMEOUT_SECONDS,
+        stream=True,
+    )
     response.raise_for_status()
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    content_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+    if content_type and content_type not in ALLOWED_CONTENT_TYPES:
+        raise ValueError("That URL doesn't appear to be an HTML article.")
+
+    # Read the body with a hard size cap instead of trusting Content-Length.
+    chunks: List[bytes] = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=8192):
+        total += len(chunk)
+        if total > FETCH_MAX_BYTES:
+            response.close()
+            raise ValueError("The article page is too large to analyze.")
+        chunks.append(chunk)
+
+    soup = BeautifulSoup(b"".join(chunks), "html.parser")
 
     title = ""
     og_title = soup.find("meta", property="og:title")
@@ -371,8 +477,8 @@ def build_summary(verdict: str, score: int) -> str:
 
 def analyze_article(url: str) -> Dict:
     parsed = requests.utils.urlparse(url)
-    if parsed.scheme not in {"http", "https"}:
-        raise ValueError("URL must start with http:// or https://")
+    # SSRF guard runs before any fetch (raises ValueError -> 400).
+    assert_url_allowed(url)
 
     article = scrape_article(url)
     headline = article.get("headline") or ""
@@ -411,6 +517,7 @@ def analyze_article(url: str) -> Dict:
 
     return {
         "url": url,
+        "engine": f"python-nlp ({EMBEDDING_MODEL.split('/')[-1]})",
         "headline": headline,
         "headline_extracted": headline_extracted,
         "body_snippet": normalize_whitespace(body)[:420] + ("..." if len(body) > 420 else ""),
@@ -459,12 +566,20 @@ def analyze_route():
 
 @app.get("/")
 def index():
-    return send_from_directory(".", "index.html")
+    return send_from_directory(PUBLIC_DIR, "index.html")
 
 
-@app.get("/<path:filename>")
-def static_files(filename: str):
-    return send_from_directory(".", filename)
+@app.get("/healthz")
+def healthz():
+    return jsonify({"status": "ok"})
+
+
+# Static assets (styles.css, script.js, theme.js, robots.txt) are served
+# automatically by Flask from PUBLIC_DIR because static_url_path="". Any other
+# unmatched path falls back to the single-page app.
+@app.errorhandler(404)
+def spa_fallback(_error):
+    return send_from_directory(PUBLIC_DIR, "index.html"), 200
 
 
 if __name__ == "__main__":
