@@ -1,13 +1,24 @@
-newspaper3k
-beautifulsoup4
-spacy
-sentence-transformers
-scikit-learn
-nltk
-textblob
-torch
-transformers
-flask
-requests
-lxml
-lxml_html_clean
+# BaitBlock Python NLP backend (app.py) — pinned for reproducible installs.
+#
+# After `pip install -r requirements.txt` you MUST also download the spaCy model
+# and (optionally) the NLTK VADER lexicon used for sentiment:
+#
+#   python -m spacy download en_core_web_sm
+#   python -m nltk.downloader vader_lexicon
+#
+# On first run, the sentence-transformer model (default all-mpnet-base-v2, ~420MB)
+# is downloaded to .cache/huggingface. Set CLICKBAIT_EMBEDDING_MODEL to override.
+
+Flask==3.1.3
+newspaper3k==0.2.8
+beautifulsoup4==4.14.3
+lxml==6.0.4
+lxml_html_clean==0.4.4
+spacy==3.8.14
+sentence-transformers==5.4.0
+scikit-learn==1.8.0
+nltk==3.9.4
+textblob==0.20.0
+torch==2.11.0
+transformers==5.5.3
+requests==2.33.1

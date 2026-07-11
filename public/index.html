@@ -1,90 +1,372 @@
 <!doctype html>
-<html lang="en">
-<head>
-	<meta charset="UTF-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<title>BaitBlock | Clickbait Detector</title>
-	<link rel="preconnect" href="https://fonts.googleapis.com" />
-	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-	<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet" />
-	<link rel="stylesheet" href="./styles.css" />
-</head>
-<body>
-	<main class="page-shell">
-		<section class="hero-card brutal-card">
-			<p class="hero-tag">Truth Check Engine</p>
-			<h1>BaitBlock</h1>
-			<p class="hero-copy">
-				Paste a news article link and get a fast estimate of whether the headline is likely
-				clickbait or deceptive.
-			</p>
-			<span class="sticker">No hype, just signals</span>
-		</section>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>The BaitBlock Times — Clickbait & Headline Credibility Checker</title>
 
-		<section class="input-card brutal-card">
-			<label for="articleUrl">Article URL</label>
-			<div class="input-row">
-				<input id="articleUrl" type="url" placeholder="https://example.com/news-story" autocomplete="off" />
-				<button id="analyzeBtn" type="button">Analyze</button>
-			</div>
-			<p id="statusText" class="status-text">Ready when you are.</p>
-		</section>
+    <!-- SEO -->
+    <meta
+      name="description"
+      content="The BaitBlock Times analyzes a news article URL and estimates whether the headline is clickbait or deceptive, using explainable heuristic signals. Not a fact-checker — a fast credibility warning."
+    />
+    <meta name="theme-color" content="#f3ead4" />
+    <link rel="canonical" href="/" />
 
-		<section id="resultCard" class="result-card brutal-card hidden" aria-live="polite">
-			<div class="result-header">
-				<h2 id="resultLabel">Result</h2>
-				<div class="score-stack">
-					<span id="resultScore" class="score-pill">0%</span>
-					<span id="confidenceScore" class="confidence-pill">100%</span>
-				</div>
-			</div>
-			<p id="resultSummary" class="result-summary"></p>
+    <!-- Open Graph / social -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="The BaitBlock Times" />
+    <meta
+      property="og:title"
+      content="The BaitBlock Times — Clickbait & Headline Credibility Checker"
+    />
+    <meta
+      property="og:description"
+      content="Paste a news link and get a fast, explainable estimate of whether the headline is clickbait or deceptive."
+    />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="The BaitBlock Times — Clickbait Checker" />
+    <meta
+      name="twitter:description"
+      content="Paste a news link and get a fast, explainable clickbait-risk estimate."
+    />
 
-			<div class="result-grid">
-				<article class="detail-box">
-					<h3>Detected Headline</h3>
-					<p id="headlineText">-</p>
-				</article>
-				<article class="detail-box">
-					<h3>Article Context</h3>
-					<div id="articleInfoList" class="tag-cloud"></div>
-				</article>
-				<article class="detail-box">
-					<h3>NLP Metrics</h3>
-					<div id="metricsList" class="tag-cloud"></div>
-				</article>
-				<article class="detail-box">
-					<h3>Score Breakdown</h3>
-					<div id="breakdownList" class="tag-cloud"></div>
-				</article>
-				<article class="detail-box">
-					<h3>Top Signals</h3>
-					<div id="signalsList" class="tag-cloud"></div>
-				</article>
-				<article class="detail-box">
-					<h3>Body Snippet</h3>
-					<p id="bodySnippetText">-</p>
-				</article>
-				<article class="detail-box">
-					<h3>Key Phrases & Entities</h3>
-					<div id="intelList" class="tag-cloud"></div>
-				</article>
-				<article class="detail-box tag-panel">
-					<h3>Entity Groups</h3>
-					<div id="entityGroupList" class="group-stack"></div>
-				</article>
-				<article class="detail-box tag-panel full-width">
-					<h3>Supporting Sentences</h3>
-					<div id="supportingSentenceList" class="sentence-stack"></div>
-				</article>
-			</div>
+    <!-- Inline SVG favicon (no external request; CSP-friendly) -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23f3ead4'/%3E%3Crect x='2' y='2' width='28' height='28' fill='none' stroke='%231b1610' stroke-width='2'/%3E%3Ctext x='16' y='23' font-family='Georgia,serif' font-size='20' font-weight='900' text-anchor='middle' fill='%23cf3722'%3EB%3C/text%3E%3C/svg%3E"
+    />
 
-			<p class="note">
-				This is a heuristic estimate, not a final fact-check verdict. Use it as a warning signal.
-			</p>
-		</section>
-	</main>
+    <!-- Preload above-the-fold self-hosted fonts -->
+    <link rel="preload" href="/fonts/playfair-900.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/anton-400.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/ptserif-400.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/oswald-600.woff2" as="font" type="font/woff2" crossorigin />
 
-	<script src="./script.js"></script>
-</body>
+    <!-- Set theme before paint to avoid a flash -->
+    <script src="./theme.js"></script>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./script.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <!-- ============ MASTHEAD ============ -->
+    <header class="site-header">
+      <div class="wrap masthead">
+        <div class="masthead-top">
+          <div class="masthead-corner left">
+            <span class="corner-line">Vol. I · Web Edition</span>
+            <span class="corner-line" id="mastheadDate">— · — · —</span>
+          </div>
+
+          <div class="masthead-name">
+            <span class="masthead-ears left" aria-hidden="true">★</span>
+            <a class="nameplate" href="/" aria-label="The BaitBlock Times — home"
+              >The BaitBlock Times</a
+            >
+            <span class="masthead-ears right" aria-hidden="true">★</span>
+          </div>
+
+          <div class="masthead-corner right">
+            <span class="corner-line">No. 001 · Price 25¢</span>
+            <button
+              id="themeToggle"
+              class="theme-toggle"
+              type="button"
+              aria-pressed="false"
+              aria-label="Toggle dark mode"
+              title="Toggle edition"
+            >
+              <span class="theme-toggle-icon" aria-hidden="true"></span>
+              <span class="theme-toggle-label"></span>
+            </button>
+          </div>
+        </div>
+
+        <div class="masthead-rule"></div>
+        <p class="masthead-tagline">“We Read The Body So You Don't” — New York · Since 2025</p>
+        <div class="masthead-rule thin"></div>
+      </div>
+
+      <div class="kicker-ribbon" aria-hidden="true">
+        <div class="kicker-track">
+          <span
+            >★ Headline Investigation Desk ★ Read Past The Headline ★ Truth In The Byline ★ Don't
+            Get Baited ★</span
+          >
+          <span
+            >★ Headline Investigation Desk ★ Read Past The Headline ★ Truth In The Byline ★ Don't
+            Get Baited ★</span
+          >
+        </div>
+      </div>
+    </header>
+
+    <main id="main" class="wrap">
+      <!-- ============ THE DESK (lede + input) ============ -->
+      <section class="hero front-lede">
+        <div class="lede-left">
+          <span class="kicker-label">Submit A Headline</span>
+          <h1 class="lede-head">Is that headline <span class="grad">baiting</span> you?</h1>
+          <p class="lede">
+            Paste a news link. The BaitBlock Times fetches the story, reads the body against the
+            headline, and files a fast, explainable verdict on clickbait or deceptive framing.
+          </p>
+        </div>
+
+        <form id="analyzeForm" class="input-card" novalidate>
+          <label for="articleUrl" class="input-label">The Wire — Paste Story URL</label>
+          <div class="input-row">
+            <input
+              id="articleUrl"
+              name="url"
+              type="url"
+              inputmode="url"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="https://example.com/news-story"
+              aria-describedby="statusText"
+            />
+            <button id="analyzeBtn" type="submit">
+              <span class="btn-label">Investigate</span>
+              <span class="btn-spinner" aria-hidden="true"></span>
+            </button>
+          </div>
+          <p id="statusText" class="status-text" role="status" aria-live="polite">
+            Ready when you are.
+          </p>
+
+          <div class="examples">
+            <span class="examples-label">From the wire:</span>
+            <button class="chip-btn" type="button" data-example="https://www.bbc.com/news">
+              a real news site
+            </button>
+            <button
+              class="chip-btn"
+              type="button"
+              data-example="https://en.wikipedia.org/wiki/Clickbait"
+            >
+              a neutral article
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- ============ Error banner ============ -->
+      <div id="errorBanner" class="banner banner-error hidden" role="alert">
+        <span class="banner-icon" aria-hidden="true">!</span>
+        <p id="errorText" class="banner-text"></p>
+        <button id="errorDismiss" class="banner-close" type="button" aria-label="Dismiss error">
+          &times;
+        </button>
+      </div>
+
+      <!-- ============ Loading skeleton ("press running") ============ -->
+      <section id="loadingCard" class="card skeleton-card hidden" aria-hidden="true">
+        <div class="skel skel-gauge"></div>
+        <div class="skel-lines">
+          <div class="skel skel-line w-70"></div>
+          <div class="skel skel-line w-90"></div>
+          <div class="skel skel-line w-50"></div>
+        </div>
+        <div class="skel-grid">
+          <div class="skel skel-panel"></div>
+          <div class="skel skel-panel"></div>
+          <div class="skel skel-panel"></div>
+          <div class="skel skel-panel"></div>
+        </div>
+      </section>
+
+      <!-- ============ Empty state: front-page filler ============ -->
+      <section id="emptyState" class="card empty-state">
+        <div class="section-banner">
+          <span class="section-banner-label">How The Press Works</span>
+        </div>
+        <div class="broadsheet">
+          <ol class="steps">
+            <li>
+              <span class="step-num" aria-hidden="true">1</span>
+              <div>
+                <strong>Fetch</strong>
+                <p>We download the article server-side and pull out the headline and body.</p>
+              </div>
+            </li>
+            <li>
+              <span class="step-num" aria-hidden="true">2</span>
+              <div>
+                <strong>Compare</strong>
+                <p>
+                  We check how well the headline matches the article and scan for hype patterns.
+                </p>
+              </div>
+            </li>
+            <li>
+              <span class="step-num" aria-hidden="true">3</span>
+              <div>
+                <strong>Score</strong>
+                <p>You get a 0–100 risk score with the exact signals behind it.</p>
+              </div>
+            </li>
+          </ol>
+
+          <aside class="almanac">
+            <h3 class="almanac-title">The BaitBlock Method</h3>
+            <dl class="almanac-list">
+              <div>
+                <dt>Semantic gap</dt>
+                <dd>+18</dd>
+              </div>
+              <div>
+                <dt>Bait phrase</dt>
+                <dd>+14</dd>
+              </div>
+              <div>
+                <dt>Sensational tone</dt>
+                <dd>+12</dd>
+              </div>
+              <div>
+                <dt>Teaser not echoed</dt>
+                <dd>+12</dd>
+              </div>
+              <div>
+                <dt>ALL-CAPS shouting</dt>
+                <dd>+10</dd>
+              </div>
+              <div>
+                <dt>Deception hint</dt>
+                <dd>+10</dd>
+              </div>
+              <div>
+                <dt>Gap threshold</dt>
+                <dd>&lt; 0.35</dd>
+              </div>
+              <div>
+                <dt>Clickbait cutoff</dt>
+                <dd>&ge; 70</dd>
+              </div>
+              <div>
+                <dt>Borderline cutoff</dt>
+                <dd>&ge; 40</dd>
+              </div>
+            </dl>
+            <p class="almanac-note">
+              Points accumulate toward a 0–100 risk score. Verdicts: 0–39 Likely Legit · 40–69
+              Borderline · 70–100 Clickbait.
+            </p>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ============ Result: the analyzed front page ============ -->
+      <section id="resultCard" class="card result-card hidden" aria-live="polite" tabindex="-1">
+        <div class="edition-banner">
+          <span class="edition-banner-label">The Verdict Is In</span>
+        </div>
+
+        <div class="headline-splash">
+          <span class="kicker-label">Today's Headline, On Trial</span>
+          <p id="headlineText" class="headline-text">—</p>
+        </div>
+
+        <div class="verdict-band">
+          <span id="verdictBadge" class="verdict-badge">Analyzing…</span>
+        </div>
+
+        <div class="result-top">
+          <div class="gauge-seal">
+            <div class="gauge" id="gauge" role="img" aria-label="Risk score">
+              <svg viewBox="0 0 120 120" width="150" height="150">
+                <circle class="gauge-track" cx="60" cy="60" r="52" />
+                <circle
+                  class="gauge-fill"
+                  id="gaugeFill"
+                  cx="60"
+                  cy="60"
+                  r="52"
+                  transform="rotate(-90 60 60)"
+                />
+              </svg>
+              <div class="gauge-center">
+                <span id="gaugeScore" class="gauge-score">0</span>
+                <span class="gauge-unit">/100 risk</span>
+              </div>
+            </div>
+            <span class="seal-caption">BaitBlock Risk Seal · Fig. 1</span>
+          </div>
+
+          <div class="verdict-block">
+            <p id="resultSummary" class="result-summary"></p>
+            <div class="result-meta">
+              <span id="confidenceChip" class="meta-chip">Confidence: —</span>
+              <span id="engineChip" class="meta-chip">Engine: —</span>
+              <span id="sourceChip" class="meta-chip">Source: —</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="result-grid">
+          <article class="panel col-5">
+            <h3>Approval Ratings</h3>
+            <div id="breakdownBars" class="bars"></div>
+          </article>
+
+          <article class="panel col-7">
+            <h3>What Our Reporters Found</h3>
+            <ul id="signalsList" class="signal-list" role="list"></ul>
+          </article>
+
+          <article class="panel col-4">
+            <h3>By The Numbers</h3>
+            <dl id="metricsList" class="metric-grid"></dl>
+          </article>
+
+          <article class="panel col-4">
+            <h3>The Dateline</h3>
+            <dl id="articleInfoList" class="metric-grid"></dl>
+          </article>
+
+          <article class="panel col-4">
+            <h3>Who's Who</h3>
+            <div id="entityGroupList" class="group-stack"></div>
+          </article>
+
+          <article class="panel col-7">
+            <h3>The Story, Continued</h3>
+            <p id="bodySnippetText" class="body-snippet">—</p>
+          </article>
+
+          <article class="panel col-5">
+            <h3>Mentioned In This Issue</h3>
+            <div id="intelList" class="intel"></div>
+          </article>
+
+          <article class="panel panel-wide">
+            <h3>Pull Quotes</h3>
+            <div id="supportingSentenceList" class="sentence-stack"></div>
+          </article>
+        </div>
+
+        <div class="result-actions">
+          <button id="analyzeAnotherBtn" class="ghost-btn" type="button">
+            Set The Next Edition
+          </button>
+        </div>
+
+        <p class="note">
+          This is a heuristic estimate, not a fact-check verdict. Use it as a warning signal, then
+          read critically.
+        </p>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <p>
+          Printed by BaitBlock Press · Est. 2025 · Explainable clickbait heuristics ·
+          <a href="https://github.com/" rel="noopener">Source &amp; Docs</a>
+        </p>
+      </div>
+    </footer>
+  </body>
 </html>
