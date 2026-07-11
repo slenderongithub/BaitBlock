@@ -12,9 +12,15 @@ services:
     plan: free # switch to "starter" ($7/mo) to remove idle spin-down + get more RAM
     region: oregon # pick the region closest to you; see render.com/docs/regions
 
-    # `--with-deps` installs the OS-level libraries Chromium needs on Render's build image,
-    # not just the browser binary itself. Required for the Tier-2 headless acquisition tier.
-    buildCommand: npm install && npx playwright install --with-deps chromium
+    # NOTE: no `--with-deps` — that flag needs root (apt-get) to install Chromium's OS-level
+    # libraries, and Render's build sandbox runs as a non-root user with no root password,
+    # so `--with-deps` fails the build outright ("su: Authentication failure"). This installs
+    # just the browser binary. If Chromium then fails to *launch* at runtime (missing shared
+    # library errors in the app logs, not build logs), Render's base image is missing a system
+    # lib `--with-deps` would have provided — the real fix at that point is switching this
+    # service to a Docker-based deploy using Playwright's own official image, which ships with
+    # every required library preinstalled.
+    buildCommand: npm install && npx playwright install chromium
     startCommand: npm start
 
     healthCheckPath: /healthz
