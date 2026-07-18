@@ -19,7 +19,7 @@
     "express": "^4.21.2",
     "express-rate-limit": "^8.5.2",
     "fast-xml-parser": "^5.9.3",
-    "helmet": "^8.2.0",
+    "helmet": "^8.3.0",
     "ipaddr.js": "^2.4.0",
     "playwright": "^1.61.1",
     "robots-parser": "^3.0.1"
