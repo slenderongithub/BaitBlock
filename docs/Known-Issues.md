@@ -1,6 +1,6 @@
 # Known Issues
 
-Status as of **v1.1.0 (2026-07-11)**. Most of the original inventory was resolved in the production-readiness upgrade — see [[../CHANGELOG]]. Items are marked ✅ Resolved, 🟡 Partially addressed, or ⬜ Open.
+Status as of **v2.0.0 (2026-10-02)**. Most of the original inventory was resolved in the production-readiness upgrade — see [[../CHANGELOG]]. Items are marked ✅ Resolved, 🟡 Partially addressed, or ⬜ Open.
 
 ## ✅ Resolved in v1.1.0
 
@@ -23,15 +23,35 @@ Status as of **v1.1.0 (2026-07-11)**. Most of the original inventory was resolve
 17. ✅ **Express one patch behind + audit findings** — `npm audit fix` applied, 0 vulnerabilities.
 18. ✅ **Windows-only launcher** — `start.sh` added for macOS/Linux.
 
+## ✅ Resolved in v2.0.0
+
+- ✅ **DNS-rebinding TOCTOU (Node, was #20)** — SSRF validation now runs inside the socket's DNS lookup (`guardedLookup` on an undici `Agent` in `safeFetch.js`).
+- ✅ **Python SSRF via redirects** — newspaper3k/requests followed redirects without re-validation. `safe_get` in `app.py` now follows each hop manually and validates it.
+- ✅ **Python backend had no rate limiter (was #21)** — in-memory per-IP limiter + concurrency cap + security headers + 4 KB body cap; 500s no longer leak exception text.
+- ✅ **Node "named entities" were a capitalized-word regex (was #22)** — now `compromise` People / Places / Organizations.
+- ✅ **No evaluation harness (was #23), partially** — the headline model has a measured held-out score (98.2% acc.). See the open item below for article-level evaluation.
+- ✅ **Single-word sentiment false positives** — one positive/negative word used to set |polarity| = 1.0 and flag "sensational tone"; replaced by a VADER-style normalised score plus a separate loaded-language lexicon.
+
+## ✅ Resolved in v2.1.0
+
+- ✅ **Articles without `<p>` paragraphs weren't extracted** (BuzzFeed, CBS, The Hindu, …) — Readability (Node) and a leaf-block scan (Python).
+- ✅ **Headless tier silently skipped when Playwright's Chromium wasn't downloaded** — falls back to installed Chrome/Edge.
+- ✅ **Tracked URLs blocked by robots.txt** (e.g. `?traffic_source=`) — tracking params stripped server-side.
+- ✅ **Hard failures for walled sites** — now a labelled Headline Only read; real 404s get a clear 404.
+
 ## 🟡 Partially addressed
 
 19. 🟡 **Two engines diverge on `cosine_similarity_score`** — still true by design (Node = lexical overlap; Python = real SBERT cosine). Now explicitly documented in code comments, the response `engine` field, [[Architecture]], and [[Glossary]]. Unifying on one engine remains a strategic (out-of-scope) decision.
-20. 🟡 **DNS-rebinding TOCTOU** — the SSRF guard resolves-then-fetches and re-validates redirects, which closes the common cases, but does not pin the connection to the validated IP. A hostname that changes its DNS answer between validation and fetch is a residual, documented risk on both engines.
-21. 🟡 **Python backend has no rate limiter** — the Node (default) engine does; adding `flask-limiter` to the Python engine is a documented follow-up.
+20. 🟡 **DNS-rebinding TOCTOU** — closed for the Node fetch path (connect-time validation). The Python engine still resolves-then-fetches per hop, so a hostname that changes its DNS answer between validation and connect remains a residual risk there.
+
+26. 🟡 **Headless browser DNS** — Chromium resolves names itself, so the headless tier validates each request's host up front but can't pin the connection the way the Node fetch path does.
 
 ## ⬜ Open (lower priority)
 
-22. ⬜ **Node "named entities" are a capitalized-word regex**, grouped into a single "Proper Nouns" bucket — real NER only comes from the Python engine (`ORG`/`PERSON`/`GPE`/…).
-23. ⬜ **No real evaluation harness** — the charts still come from hand-authored sample CSVs; nothing runs the live engine against a labeled corpus. See [[Future-Roadmap]].
-24. ⬜ **No result caching** — every request re-fetches and re-computes; costly for the Python engine's model path. See [[Improvement-Ideas]].
+27. ⬜ **No labelled full-article benchmark** — article-level behaviour is pinned by seven archetype fixtures and spot-checked on live BBC / Guardian / Daily Mail / BuzzFeed articles, not measured on a corpus. Adding one (e.g. FakeNewsNet, or hand-labelled samples) would let the dimension weights be fitted instead of hand-set.
+28. ⬜ **English only** — lexicons and the headline model are English; non-English pages get a low `analysis_confidence`.
+29. ⬜ **Headline model domain** — trained on 2015-era BuzzFeed/Upworthy vs. NYT/Wikinews headlines; explainer headlines ("Why the housing market is cooling") can read as mildly clickbait-like (~0.7). The rules and dead zone keep these out of the high tiers.
+30. ⬜ **In-memory limits** — rate limit and concurrency counters are per process; use a shared store if running several instances.
+
+24. 🟡 **Result caching** — Node caches fetched articles in memory (15 min); scoring is re-run per request (cheap). The Python engine has no cache.
 25. ⬜ **JS↔Python response casing** — the Node response still mixes conventions in places; low impact.

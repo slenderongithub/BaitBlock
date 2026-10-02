@@ -1,7 +1,7 @@
 {
   "name": "clickbait-detection-webapp",
-  "version": "1.1.0",
-  "description": "Web app that estimates whether a news article link is clickbait/deceptive using explainable heuristic signals.",
+  "version": "2.1.0",
+  "description": "Web app that scores a news article URL for clickbait, misleading headlines, weak sourcing and manipulation, with an explainable six-dimension breakdown.",
   "main": "src/server.js",
   "engines": {
     "node": ">=20.18.1"
@@ -12,17 +12,22 @@
     "test": "node --test",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "train:headline": "node scripts/train-headline-model.js"
   },
   "dependencies": {
+    "@mozilla/readability": "^0.6.0",
     "cheerio": "^1.0.0",
+    "compromise": "^14.17.0",
     "express": "^4.21.2",
     "express-rate-limit": "^8.5.2",
     "fast-xml-parser": "^5.9.3",
     "helmet": "^8.2.0",
     "ipaddr.js": "^2.4.0",
+    "linkedom": "^0.18.13",
     "playwright": "^1.61.1",
-    "robots-parser": "^3.0.1"
+    "robots-parser": "^3.0.1",
+    "undici": "^7.30.0"
   },
   "devDependencies": {
     "eslint": "^9.39.4",

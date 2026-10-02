@@ -17,7 +17,10 @@ async function findWaybackSnapshot(url) {
     if (!res.ok) return null;
     const data = JSON.parse(res.html);
     const closest = data && data.archived_snapshots && data.archived_snapshots.closest;
-    if (closest && closest.available && closest.url) return closest.url;
+    // Only snapshots the archive itself recorded as HTTP 200 (not a captured 404 page).
+    if (closest && closest.available && closest.url && String(closest.status) === "200") {
+      return closest.url;
+    }
   } catch {
     /* ignore — no snapshot */
   }

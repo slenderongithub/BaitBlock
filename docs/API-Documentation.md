@@ -1,80 +1,131 @@
 # API Documentation
 
-Single endpoint, implemented independently (but with a compatible contract) in both backends.
+Single endpoint, implemented independently (with the same contract) in both backends.
 
 ## `POST /api/analyze`
 
 ### Request
 
-```json
+```http
+POST /api/analyze
+Content-Type: application/json
+
 { "url": "https://example.com/news-story" }
 ```
 
-- `url` (string, required) — must be a well-formed `http://` or `https://` URL.
+- `url` (string, required): an `http://` or `https://` URL, at most 2,048 characters.
+- The body must be JSON (`Content-Type: application/json`) and at most 4 KB.
+- Same-origin only: a request with a foreign `Origin` header or `Sec-Fetch-Site: cross-site` is refused.
 
 ### Success Response — `200 OK`
 
-Node backend (`src/server.js`) response shape:
-
-```json
+```jsonc
 {
   "url": "https://example.com/news-story",
-  "title": "...",
-  "headline": "...",
+  "headline": "Coffee cures cancer, scientists prove",
   "headline_extracted": true,
-  "score": 62,
-  "bucket": "warning",
-  "isLikelyClickbait": true,
-  "verdict": "Borderline",
-  "composite_sensationalism_score": 62,
-  "legitimacy_confidence_score": 38,
-  "summary": "This article has some clickbait characteristics...",
-  "signals": ["..."],
-  "body_snippet": "...",
+
+  // ---- verdict ----
+  "score": 77, // 0-100 overall risk
+  "tier": 4, // 1..5
+  "risk_level": "high", // minimal | low | moderate | high | severe
+  "bucket": "risky", // safe | warning | risky (UI colour)
+  "verdict": "Misleading Headline", // see README "How The Verdict Is Made"
+  "primary_concern": "Misleading Headline", // null when nothing scores >= 25
+  "summary": "High risk of misleading or manipulative framing. Biggest issue: …",
+
+  // ---- the six dimensions, each with its evidence ----
+  "dimensions": [
+    {
+      "key": "consistency", // bait | sensational | consistency | sourcing | transparency | manipulation
+      "label": "Headline vs. body",
+      "weight": 1.0,
+      "score": 63,
+      "assessed": true, // false = not checked (e.g. url-only read); the UI shows N/A
+      "signals": [
+        { "text": "Headline states it as certain (\"cures\") while the article hedges 11 times …", "points": 45 }
+      ]
+    }
+  ],
+  "signals": ["…"], // all dimension signals, most important first (max 8)
+  "strengths": ["3 attributed statements.", "Byline and publication date are present."],
+  "context_labels": [{ "label": "Opinion", "detail": "Opinion piece: arguments, not straight news." }],
+  "guidance": ["The article doesn't clearly back up its own headline. …"],
+
+  // ---- headline ----
+  "headline_highlights": ["cures"], // phrases the UI marks in the headline
+  "headline_model": { "probability": 0.231, "terms": [] },
+
+  // ---- reliability of the analysis itself ----
+  "analysis_confidence": { "score": 85, "notes": ["Short article text limits the sourcing analysis."] },
+  "evidence_metrics": { "attributions": 3, "quotes": 0, "anonymous": 0, "rumor": 0, "evidence": 4, "loaded_density": 0 },
+
+  // ---- article facts ----
   "source_domain": "example.com",
-  "published_at": "2026-01-01T00:00:00Z",
-  "authors": ["..."],
+  "site_name": "Example Gazette",
+  "article_type": "NewsArticle",
+  "published_at": "2026-09-01T09:00:00Z", // or "Not available"
+  "authors": ["Jane Doe"],
   "extraction_method": "Paragraph extraction (article p)",
-  "headline_word_count": 9,
-  "word_count": 512,
-  "estimated_read_time_minutes": 2,
-  "numeric_claim_count": 3,
-  "score_breakdown": {
-    "semantic_gap_points": 18,
-    "sentiment_points": 0,
-    "hook_points": 30,
-    "synergy_points": 6
-  },
-  "key_phrases": ["..."],
-  "named_entities": ["..."],
-  "entity_groups": { "Proper Nouns": ["..."] },
-  "supporting_sentences": ["..."],
-  "cosine_similarity_score": 0.28,
-  "sentiment_polarity": 0.1,
-  "semantic_gap": true,
+  "fetch_via": "http", // http | amp | feed | headless | wayback | url-only (Node)
+  "partial": false, // true when only part of the page (or only the link) could be read
+  "word_count": 99,
+  "headline_word_count": 5,
+  "estimated_read_time_minutes": 1,
+  "numeric_claim_count": 0,
+  "body_snippet": "…",
+  "meta_description": "…",
+  "key_phrases": ["lower risk", "coffee"],
+  "entity_groups": { "People": ["…"], "Places": ["…"], "Organizations": ["…"] },
+  "named_entities": ["…"],
+  "supporting_sentences": ["…"], // body sentences that best match the headline
+  "claims_to_verify": ["…"], // sentences with figures / attributed claims
+  "analyzed_at": "2026-10-02T02:13:00.000Z",
+  "engine": "node-nlp", // or "python-nlp (<model>)"
+
+  // ---- legacy fields (kept for older clients) ----
+  "composite_sensationalism_score": 77,
+  "legitimacy_confidence_score": 23, // = 100 - score; NOT the analysis confidence
+  "cosine_similarity_score": 0.4, // Node: stemmed lexical alignment; Python: SBERT cosine
+  "sentiment_polarity": 0,
+  "semantic_gap": false,
   "sensational_tone": false,
-  "meta_description": "..."
+  "score_breakdown": { "semantic_gap_points": 63, "sentiment_points": 0, "hook_points": 0, "synergy_points": 0 }
 }
 ```
 
-Python backend (`app.py`) — same field names for the fields the frontend actually reads (`verdict`, `composite_sensationalism_score`, `legitimacy_confidence_score`, `score_breakdown`, `entity_groups` grouped by real spaCy labels like `ORG`/`PERSON` instead of one `Proper Nouns` bucket, `supporting_sentences`, etc.), but does **not** include `bucket` or `isLikelyClickbait` — the frontend's `normalizeApiResponse()` derives verdict from `bucket` only when `verdict` is absent, so this is handled gracefully.
+Both engines emit every field above. The frontend's `normalizeApiResponse()` still defaults any
+missing field, so an older engine that omits the v2 fields renders with the legacy 4-bar breakdown.
+
+A site that blocks automated readers outright does **not** produce an error: the response is a
+normal 200 with `fetch_via: "url-only"`, `partial: true`, `verdict: "Headline Only"` (unless the
+headline itself is high-risk) and `analysis_confidence.score: 15`.
 
 ### Error Responses
 
-| Status | Condition | Body |
-|---|---|---|
-| 400 | Missing/non-string `url` | `{ "error": "Please provide a valid URL." }` |
-| 400 | URL fails `new URL()` or protocol isn't http/https | `{ "error": "URL format is invalid." }` |
-| 400 | Upstream fetch returned non-2xx | `{ "error": "Failed to fetch article: HTTP <status>" }` |
-| 500 | Any other exception during fetch/parse/score | `{ "error": "Could not analyze this URL right now. The site may block automated fetches.", "detail": "<message>" }` |
+All errors are `{ "error": "<message>" }`. No stack traces or internal details are ever returned.
 
-Python backend error shapes are similar but distinct: `{"error": "Please provide a valid URL."}` (400), `ValueError` message passthrough (400, e.g. "Could not extract enough article body text."), or `{"error": "Analysis failed.", "detail": "..."}` (500).
+| Status | Condition |
+| ------ | --------- |
+| 400 | Missing/invalid `url`, malformed JSON, non-http(s) scheme, private/reserved destination (SSRF), unreadable article |
+| 403 | Cross-origin request |
+| 404 | The article URL doesn't exist (origin returned 404/410) |
+| 404 | Unknown `/api/*` route (JSON body) |
+| 413 | Request body over 4 KB, or the article page over the fetch size cap |
+| 414 | `url` longer than 2,048 characters |
+| 415 | Request body not JSON, or the target isn't an HTML page |
+| 429 | Per-IP rate limit exceeded |
+| 502 / 504 | Upstream site unreachable, blocking, or too slow |
+| 503 | Too many analyses in flight (`Retry-After: 5`) |
+| 500 | Unexpected failure (logged server-side) |
 
-### Static Routes
+API responses carry `Cache-Control: no-store`.
 
-- `GET /` and any unmatched `GET *` → `index.html` (Node backend serves from `public/`; Python backend serves from repo root, which is broken — see [[Known-Issues]]).
-- All other static assets (`script.js`, `styles.css`, fonts via CDN) served automatically by `express.static`.
+## `GET /healthz`
 
-## No Other Endpoints
+`{ "status": "ok" }`
 
-No auth endpoints, no health check, no versioning (`/api/v1/...`), no OpenAPI/Swagger spec. See [[Known-Issues]] for the SSRF and rate-limiting gaps on this single endpoint.
+## Static Routes
+
+`GET /` and any other unmatched non-API `GET` serve `public/index.html`. `/?url=<encoded url>`
+pre-fills the form and runs the analysis (used by the "Copy link" button).

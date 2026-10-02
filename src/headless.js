@@ -17,11 +17,32 @@ const { FetchError } = require("./errors");
 
 let browserPromise = null;
 let closing = false;
+let activeRenders = 0;
+
+/**
+ * Playwright's bundled Chromium if installed (`npx playwright install chromium`),
+ * else an installed Google Chrome or Microsoft Edge, so the tier works on
+ * machines that never ran the Playwright download.
+ */
+async function launchAny() {
+  const { chromium } = require("playwright");
+  let lastError;
+  for (const opts of [{}, { channel: "chrome" }, { channel: "msedge" }]) {
+    try {
+      return await chromium.launch({ headless: true, ...opts });
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
 
 function getBrowser() {
   if (!browserPromise) {
-    const { chromium } = require("playwright");
-    browserPromise = chromium.launch({ headless: true });
+    browserPromise = launchAny().catch((err) => {
+      browserPromise = null; // allow a later retry (e.g. browser installed meanwhile)
+      throw err;
+    });
   }
   return browserPromise;
 }
@@ -42,7 +63,7 @@ async function closeBrowser() {
 
 /**
  * Render a URL in a headless browser and return its DOM HTML.
- * @returns {Promise<{ html: string, finalUrl: string }>}
+ * @returns {Promise<{ html: string, finalUrl: string, status: number }>}
  */
 async function renderArticle(rawUrl) {
   if (!config.fetch.headless.enabled) {
@@ -57,6 +78,44 @@ async function renderArticle(rawUrl) {
   }
   await assertUrlAllowed(target); // validate the initial navigation target
 
+  if (!(await takeSlot(config.fetch.headless.queueWaitMs))) {
+    throw new FetchError("Headless browser is busy.", 503); // acquire.js escalates to the archive
+  }
+  try {
+    return await render(rawUrl);
+  } finally {
+    releaseSlot();
+  }
+}
+
+// Bounded render pool: wait briefly for a free page instead of skipping the
+// tier the moment two renders are already running.
+const waiting = [];
+function takeSlot(timeoutMs) {
+  if (activeRenders < config.fetch.headless.maxConcurrent) {
+    activeRenders += 1;
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    const entry = () => {
+      clearTimeout(timer);
+      activeRenders += 1;
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      waiting.splice(waiting.indexOf(entry), 1);
+      resolve(false);
+    }, timeoutMs);
+    waiting.push(entry);
+  });
+}
+function releaseSlot() {
+  activeRenders -= 1;
+  const next = waiting.shift();
+  if (next) next();
+}
+
+async function render(rawUrl) {
   let browser;
   try {
     browser = await getBrowser();
@@ -100,7 +159,7 @@ async function renderArticle(rawUrl) {
       return route.continue();
     });
 
-    await page.goto(rawUrl, {
+    const response = await page.goto(rawUrl, {
       waitUntil: "domcontentloaded",
       timeout: config.fetch.headless.timeoutMs,
     });
@@ -114,7 +173,7 @@ async function renderArticle(rawUrl) {
 
     const html = await page.content();
     const finalUrl = page.url();
-    return { html, finalUrl };
+    return { html, finalUrl, status: response ? response.status() : 0 };
   } finally {
     await context.close();
   }

@@ -3,7 +3,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 
-const { classifyAddress, assertUrlAllowed } = require("../src/ssrfGuard");
+const { classifyAddress, assertUrlAllowed, guardedLookup } = require("../src/ssrfGuard");
 const { FetchError } = require("../src/errors");
 
 test("classifyAddress blocks private, loopback, link-local and reserved ranges", () => {
@@ -41,4 +41,12 @@ test("assertUrlAllowed rejects internal hostnames without DNS", async () => {
 
 test("assertUrlAllowed permits a public IP literal", async () => {
   await assert.doesNotReject(() => assertUrlAllowed(new URL("http://8.8.8.8/")));
+});
+
+test("guardedLookup refuses a public-looking hostname that resolves to loopback (DNS rebinding)", async () => {
+  // "localhost" bypasses the hostname blocklist here because we call the
+  // connect-time resolver directly, as a rebinding attacker's DNS would.
+  const err = await new Promise((resolve) => guardedLookup("localhost", {}, (e) => resolve(e)));
+  assert.ok(err instanceof FetchError);
+  assert.equal(err.code, "ssrf_blocked");
 });
