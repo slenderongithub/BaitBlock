@@ -22,6 +22,7 @@ const NODE_GLOBALS = {
   URL: "readonly",
   fetch: "readonly",
   AbortController: "readonly",
+  TextDecoder: "readonly",
 };
 
 const BROWSER_GLOBALS = {
@@ -30,6 +31,12 @@ const BROWSER_GLOBALS = {
   fetch: "readonly",
   URL: "readonly",
   localStorage: "readonly",
+  history: "readonly",
+  location: "readonly",
+  navigator: "readonly",
+  URLSearchParams: "readonly",
+  setInterval: "readonly",
+  clearInterval: "readonly",
   requestAnimationFrame: "readonly",
   performance: "readonly",
   setTimeout: "readonly",
@@ -43,7 +50,7 @@ module.exports = [
   },
   js.configs.recommended,
   {
-    files: ["src/**/*.js", "tests/**/*.js", "*.config.js"],
+    files: ["src/**/*.js", "tests/**/*.js", "scripts/**/*.js", "*.config.js"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "commonjs",

@@ -7,10 +7,9 @@
  * server.js. Extracting it into one place makes the scoring behaviour auditable
  * and tunable, and documents *why* each threshold has the value it does.
  *
- * IMPORTANT: the default scoring weights/thresholds below are intentionally
- * identical to the original heuristic so behaviour is preserved after the
- * refactor. Change them deliberately, not casually — they are calibrated
- * against the verdict buckets the UI and README describe.
+ * IMPORTANT: the scoring constants below are contract-tested
+ * (tests/scoring.test.js, tests/analyze.test.js). Change them deliberately —
+ * they are calibrated against the tier cutoffs the UI and README describe.
  */
 
 const toInt = (value, fallback) => {
@@ -26,6 +25,9 @@ const toBool = (value, fallback = false) => {
 const config = {
   // ---- HTTP server ----
   port: toInt(process.env.PORT, 3000),
+  // Server-wide cap on analyses running at once (each may open several
+  // outbound connections and a headless browser). Excess requests get 503.
+  maxConcurrentAnalyses: toInt(process.env.CLICKBAIT_MAX_CONCURRENT, 8),
 
   // ---- Outbound fetch safety (see safeFetch.js / ssrfGuard.js) ----
   fetch: {
@@ -67,6 +69,10 @@ const config = {
       enabled: toBool(process.env.CLICKBAIT_HEADLESS, true),
       timeoutMs: toInt(process.env.CLICKBAIT_HEADLESS_TIMEOUT_MS, 20000),
       networkIdleMs: toInt(process.env.CLICKBAIT_HEADLESS_NETWORKIDLE_MS, 3000),
+      // Chromium pages are memory-heavy; beyond this, skip straight to the archive tier.
+      maxConcurrent: toInt(process.env.CLICKBAIT_HEADLESS_MAX_CONCURRENT, 2),
+      // How long a request waits for a free render slot before skipping the tier.
+      queueWaitMs: toInt(process.env.CLICKBAIT_HEADLESS_QUEUE_WAIT_MS, 30000),
     },
     // Tier 3: public archive fallback (Wayback Machine).
     archive: {
@@ -89,44 +95,27 @@ const config = {
     max: toInt(process.env.CLICKBAIT_RATE_MAX, 20), // requests per window per IP
   },
 
-  // ---- Scoring thresholds ----
+  // ---- Scoring (see scoring.js; signal definitions in data/rules.json) ----
   scoring: {
-    // Below this headline/body similarity we call it a "semantic gap": the
-    // headline and article don't appear to be about the same thing. 0.35 was
-    // the original hand-tuned cutoff. NOTE: in the Node engine `similarity` is
-    // lexical token overlap, so this is deliberately lenient.
+    // Dimension points -> 0-100 via 100*(1-e^(-points/saturation)): 50 points
+    // reads as ~63, 100 as ~86, so stacking signals has diminishing returns.
+    saturation: 50,
+    // Dimension risks below this are treated as noise when combining (noisy-OR
+    // dead zone), so many tiny flags can't add up to a high overall score.
+    deadZone: 15,
+    // Overall-score tier cutoffs: <20 minimal, <40 low, <60 moderate, <80 high, else severe.
+    tiers: [20, 40, 60, 80],
+    // Headline model: probabilities below the floor add nothing; 1.0 adds max.
+    modelFloor: 0.35,
+    modelMaxPoints: 70,
+    // Headline/body alignment (0-1) at or above this adds no consistency risk.
+    alignmentOk: 0.6,
+    // Below this alignment the legacy `semantic_gap` flag is set.
     semanticGapThreshold: 0.35,
-    // Absolute headline sentiment above this is treated as "sensational tone".
+    // |sentiment polarity| above this sets the legacy `sensational_tone` flag.
     sentimentMagnitudeThreshold: 0.5,
-    // Verdict bucket cutoffs on the final 0-100 composite score.
-    verdict: {
-      clickbait: 70, // >= 70 -> "Clickbait" (risky)
-      borderline: 40, // >= 40 -> "Borderline" (warning); else "Likely Legit"
-    },
-    // Point contributions per signal. Kept identical to the original engine.
-    points: {
-      baitPattern: 14,
-      deceptionHint: 10,
-      exclamationPer: 4,
-      exclamationMax: 12,
-      questionPer: 4,
-      questionMax: 10,
-      excessiveUppercase: 10,
-      unusualLength: 6,
-      semanticGap: 18,
-      sensationalTone: 12,
-      teaserNotEchoed: 12,
-      synergyBonus: 6,
-    },
-    // A headline shorter/longer than these word counts reads as unusual.
-    headline: {
-      minWords: 4,
-      maxWords: 20,
-      uppercaseRatio: 0.45, // fraction of letters that are uppercase
-      minLengthForUppercaseCheck: 16,
-    },
-    // Fallback score used when no headline could be extracted at all.
-    noHeadlineScore: 65,
+    // Bodies shorter than this (words) are too thin to judge sourcing/consistency.
+    minBodyWords: 80,
   },
 };
 

@@ -23,13 +23,21 @@ const els = {
   gaugeFill: $("gaugeFill"),
   gaugeScore: $("gaugeScore"),
   verdictBadge: $("verdictBadge"),
+  tierScale: $("tierScale"),
   summary: $("resultSummary"),
   confidenceChip: $("confidenceChip"),
+  confidenceNotes: $("confidenceNotes"),
   engineChip: $("engineChip"),
   sourceChip: $("sourceChip"),
+  analyzedChip: $("analyzedChip"),
   headline: $("headlineText"),
-  breakdownBars: $("breakdownBars"),
+  highlightLegend: $("highlightLegend"),
+  contextLabels: $("contextLabels"),
+  dimensions: $("dimensionList"),
+  guidance: $("guidanceList"),
+  strengths: $("strengthList"),
   signals: $("signalsList"),
+  claims: $("claimList"),
   metrics: $("metricsList"),
   articleInfo: $("articleInfoList"),
   bodySnippet: $("bodySnippetText"),
@@ -37,10 +45,17 @@ const els = {
   entityGroups: $("entityGroupList"),
   supporting: $("supportingSentenceList"),
   analyzeAnother: $("analyzeAnotherBtn"),
+  copyReport: $("copyReportBtn"),
+  copyLink: $("copyLinkBtn"),
+  print: $("printBtn"),
+  copyStatus: $("copyStatus"),
+  toTop: $("toTopBtn"),
+  scrollProgress: $("scrollProgress"),
 };
 
 const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const GAUGE_CIRCUMFERENCE = 2 * Math.PI * 52;
+let lastResult = null;
 
 /* ---------- Theme ---------- */
 function currentTheme() {
@@ -79,6 +94,21 @@ syncThemeToggle();
   }
 })();
 
+/* ---------- Scroll progress + back-to-top ---------- */
+function onScroll() {
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  const pct = max > 0 ? (window.scrollY / max) * 100 : 0;
+  if (els.scrollProgress) els.scrollProgress.style.width = `${pct}%`;
+  if (els.toTop) els.toTop.classList.toggle("hidden", window.scrollY < 600);
+}
+window.addEventListener("scroll", onScroll, { passive: true });
+if (els.toTop) {
+  els.toTop.addEventListener("click", () => {
+    window.scrollTo({ top: 0, behavior: prefersReducedMotion ? "auto" : "smooth" });
+    els.input.focus({ preventScroll: true });
+  });
+}
+
 /* ---------- Small DOM helpers ---------- */
 function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
@@ -100,11 +130,22 @@ function tagList(container, values) {
   values.forEach((v) => list.appendChild(el("span", "tag", v)));
   container.appendChild(list);
 }
+function listInto(node, items, emptyText, className) {
+  clear(node);
+  if (!items.length) {
+    node.appendChild(el("li", "is-empty", emptyText));
+    return;
+  }
+  items.forEach((t) => node.appendChild(el("li", className, t)));
+}
 
 /* ---------- UI state transitions ---------- */
 function setStatus(text, isError = false) {
   els.status.textContent = text;
   els.status.classList.toggle("is-error", isError);
+}
+function setInputInvalid(invalid) {
+  els.input.setAttribute("aria-invalid", String(invalid));
 }
 function showError(message) {
   els.errorText.textContent = message;
@@ -113,23 +154,41 @@ function showError(message) {
 function hideError() {
   els.errorBanner.classList.add("hidden");
 }
+
+const LOADING_STEPS = [
+  "Fetching the article…",
+  "Extracting headline, body and byline…",
+  "Running the six-point inspection…",
+  "Checking sources and claims…",
+  "Still working: trying fallback routes for a stubborn site…",
+];
+let loadingTimer = null;
 function setLoading(on) {
   els.analyzeBtn.disabled = on;
   els.analyzeBtn.classList.toggle("is-loading", on);
   els.loadingCard.classList.toggle("hidden", !on);
   els.loadingCard.setAttribute("aria-hidden", "true");
+  clearInterval(loadingTimer);
   if (on) {
     els.emptyState.classList.add("hidden");
     els.resultCard.classList.add("hidden");
+    let step = 0;
+    setStatus(LOADING_STEPS[0]);
+    loadingTimer = setInterval(() => {
+      step = Math.min(step + 1, LOADING_STEPS.length - 1);
+      setStatus(LOADING_STEPS[step]);
+    }, 2200);
   }
 }
 
 els.errorDismiss.addEventListener("click", hideError);
+els.input.addEventListener("input", () => setInputInvalid(false));
 
 /* ---------- Example chips ---------- */
 document.querySelectorAll(".chip-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     els.input.value = btn.dataset.example || "";
+    setInputInvalid(false);
     els.input.focus();
   });
 });
@@ -137,14 +196,39 @@ document.querySelectorAll(".chip-btn").forEach((btn) => {
 els.analyzeAnother.addEventListener("click", () => {
   els.resultCard.classList.add("hidden");
   els.emptyState.classList.remove("hidden");
+  history.replaceState(null, "", location.pathname);
   els.input.focus();
   els.input.select();
 });
 
+/* ---------- URL hygiene ---------- */
+/** Validate and strip tracking params (utm_*, fbclid, gclid…) so equal stories share a cache entry. */
+function cleanUrl(raw) {
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    try {
+      u = new URL(`https://${raw}`); // tolerate a pasted bare domain
+    } catch {
+      return null;
+    }
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  if (!u.hostname.includes(".")) return null;
+  [...u.searchParams.keys()].forEach((k) => {
+    if (/^(utm_|fbclid$|gclid$|mc_|igshid$|at_medium$|at_campaign$|ns_)/i.test(k)) {
+      u.searchParams.delete(k);
+    }
+  });
+  return u.toString();
+}
+
 /* ---------- Response normalization (tolerates both backends) ---------- */
+const LEGACY_BUCKETS = { Clickbait: "risky", Sensationalist: "warning", Borderline: "warning" };
+
 function normalizeApiResponse(data = {}) {
   const score = Number(data.composite_sensationalism_score ?? data.score ?? 0);
-  const confidence = Number(data.legitimacy_confidence_score ?? 100 - score);
   const verdict =
     data.verdict ||
     (data.bucket === "risky"
@@ -152,16 +236,28 @@ function normalizeApiResponse(data = {}) {
       : data.bucket === "warning"
         ? "Borderline"
         : "Likely Legit");
+  const conf = data.analysis_confidence;
 
   return {
     ...data,
     verdict,
+    bucket: data.bucket || LEGACY_BUCKETS[verdict] || "safe",
+    tier: Number(
+      data.tier ?? (score >= 80 ? 5 : score >= 60 ? 4 : score >= 40 ? 3 : score >= 20 ? 2 : 1)
+    ),
     composite_sensationalism_score: score,
-    legitimacy_confidence_score: confidence,
+    legitimacy_confidence_score: Number(data.legitimacy_confidence_score ?? 100 - score),
+    analysis_confidence: {
+      score: Number(conf?.score ?? 100),
+      notes: Array.isArray(conf?.notes) ? conf.notes : [],
+    },
     headline: data.headline || data.title || "",
     headline_extracted: data.headline_extracted ?? Boolean(data.title),
+    headline_highlights: Array.isArray(data.headline_highlights) ? data.headline_highlights : [],
+    headline_model: data.headline_model || null,
     body_snippet: data.body_snippet || "",
     source_domain: data.source_domain || (data.url ? safeHostname(data.url) : "Unknown"),
+    site_name: data.site_name || "",
     published_at: data.published_at || "Not available",
     authors: Array.isArray(data.authors) ? data.authors : [],
     extraction_method: data.extraction_method || "Heuristic parser",
@@ -170,6 +266,12 @@ function normalizeApiResponse(data = {}) {
     word_count: data.word_count ?? 0,
     estimated_read_time_minutes: data.estimated_read_time_minutes ?? 0,
     numeric_claim_count: data.numeric_claim_count ?? 0,
+    dimensions: Array.isArray(data.dimensions) ? data.dimensions : [],
+    strengths: Array.isArray(data.strengths) ? data.strengths : [],
+    context_labels: Array.isArray(data.context_labels) ? data.context_labels : [],
+    guidance: Array.isArray(data.guidance) ? data.guidance : [],
+    claims_to_verify: Array.isArray(data.claims_to_verify) ? data.claims_to_verify : [],
+    evidence_metrics: data.evidence_metrics || {},
     score_breakdown: data.score_breakdown || {
       semantic_gap_points: 0,
       sentiment_points: 0,
@@ -188,6 +290,8 @@ function normalizeApiResponse(data = {}) {
     summary: data.summary || "Analysis completed.",
     meta_description: data.meta_description || "Not available",
     fetch_via: data.fetch_via || "direct fetch",
+    partial: Boolean(data.partial),
+    analyzed_at: data.analyzed_at || new Date().toISOString(),
   };
 }
 
@@ -198,6 +302,7 @@ const VIA_LABELS = {
   feed: "RSS feed",
   headless: "Headless browser",
   wayback: "Web archive",
+  "url-only": "Link only (site blocked our reader)",
   "direct fetch": "Direct fetch",
 };
 function safeHostname(url) {
@@ -206,6 +311,11 @@ function safeHostname(url) {
   } catch {
     return "Unknown";
   }
+}
+function formatDate(value) {
+  const t = Date.parse(value);
+  if (!Number.isFinite(t)) return value || "Not available";
+  return new Date(t).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
 }
 
 /* ---------- Animations ---------- */
@@ -233,71 +343,166 @@ function countUp(node, target, duration) {
   }
   requestAnimationFrame(tick);
 }
-
-/* ---------- Rendering ---------- */
-function bucketFor(verdict) {
-  if (verdict === "Clickbait") return "risky";
-  if (verdict === "Sensationalist" || verdict === "Borderline") return "warning";
-  return "safe";
+function fillBar(fill, pct) {
+  if (prefersReducedMotion) fill.style.width = pct + "%";
+  else requestAnimationFrame(() => (fill.style.width = pct + "%"));
 }
 
-function renderBreakdown(breakdown) {
-  clear(els.breakdownBars);
-  const rows = [
-    ["Semantic gap", breakdown.semantic_gap_points ?? 0],
-    ["Sentiment", breakdown.sentiment_points ?? 0],
-    ["Hook phrases", breakdown.hook_points ?? 0],
-    ["Combined boost", breakdown.synergy_points ?? 0],
-  ];
-  const max = Math.max(1, ...rows.map(([, v]) => Number(v) || 0));
-  rows.forEach(([label, value]) => {
-    const row = el("div", "bar-row");
-    const head = el("div", "bar-head");
-    head.appendChild(el("span", null, label));
-    head.appendChild(el("span", "bar-val", String(value)));
-    row.appendChild(head);
-    const track = el("div", "bar-track");
-    const fill = el("div", "bar-fill");
-    track.appendChild(fill);
-    row.appendChild(track);
-    els.breakdownBars.appendChild(row);
-    const pct = (Number(value) / max) * 100;
-    if (prefersReducedMotion) {
-      fill.style.width = pct + "%";
-    } else {
-      requestAnimationFrame(() => (fill.style.width = pct + "%"));
+/* ---------- Rendering ---------- */
+
+/** Render the headline as text nodes, wrapping flagged phrases in <mark>. */
+function renderHeadline(text, highlights) {
+  clear(els.headline);
+  const phrases = highlights
+    .map((h) => h.trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  const lower = text.toLowerCase();
+  const marks = []; // [start, end) ranges, longest phrases claim first
+  phrases.forEach((p) => {
+    const needle = p.toLowerCase();
+    let from = 0;
+    for (;;) {
+      const i = lower.indexOf(needle, from);
+      if (i < 0) break;
+      const end = i + needle.length;
+      const wordEdge = (k) => k <= 0 || k >= text.length || !/[a-z0-9]/i.test(text[k]);
+      if (wordEdge(i - 1) && wordEdge(end) && !marks.some(([a, b]) => i < b && end > a)) {
+        marks.push([i, end]);
+      }
+      from = end;
     }
+  });
+  marks.sort((a, b) => a[0] - b[0]);
+  let pos = 0;
+  marks.forEach(([a, b]) => {
+    if (a > pos) els.headline.appendChild(document.createTextNode(text.slice(pos, a)));
+    els.headline.appendChild(el("mark", null, text.slice(a, b)));
+    pos = b;
+  });
+  if (pos < text.length) els.headline.appendChild(document.createTextNode(text.slice(pos)));
+  els.highlightLegend.classList.toggle("hidden", marks.length === 0);
+}
+
+function renderTierScale(tier) {
+  els.tierScale.querySelectorAll("li").forEach((li) => {
+    const t = Number(li.dataset.tier);
+    li.classList.toggle("is-active", t === tier);
+    if (t === tier) li.setAttribute("aria-current", "true");
+    else li.removeAttribute("aria-current");
+  });
+}
+
+function renderContextLabels(labels) {
+  clear(els.contextLabels);
+  labels.forEach((l) => {
+    const chip = el("span", "context-chip", l.label);
+    chip.title = l.detail || "";
+    els.contextLabels.appendChild(chip);
+    if (l.detail) els.contextLabels.appendChild(el("span", "context-detail", l.detail));
+  });
+}
+
+function levelClass(score) {
+  return score >= 60 ? "lvl-high" : score >= 30 ? "lvl-mid" : "lvl-low";
+}
+
+/** Six dimensions as expandable rows; falls back to the legacy 4-bar breakdown. */
+function renderDimensions(d) {
+  clear(els.dimensions);
+  const rows = d.dimensions.length
+    ? d.dimensions
+    : [
+        ["Headline–body gap", d.score_breakdown.semantic_gap_points],
+        ["Sentiment", d.score_breakdown.sentiment_points],
+        ["Hook phrases", d.score_breakdown.hook_points],
+        ["Combined boost", d.score_breakdown.synergy_points],
+      ].map(([label, score]) => ({ label, score: Number(score) || 0, signals: [] }));
+
+  rows.forEach((dim) => {
+    const score = Math.round(Number(dim.score) || 0);
+    const assessed = dim.assessed !== false;
+    const item = el("details", `dimension ${assessed ? levelClass(score) : "lvl-na"}`);
+    const summary = el("summary", "dimension-head");
+    summary.appendChild(el("span", "dimension-label", dim.label));
+    summary.appendChild(el("span", "dimension-score", assessed ? String(score) : "N/A"));
+    const track = el("span", "bar-track");
+    const fill = el("span", "bar-fill");
+    track.appendChild(fill);
+    summary.appendChild(track);
+    item.appendChild(summary);
+
+    const signals = Array.isArray(dim.signals) ? dim.signals : [];
+    const list = el("ul", "dimension-signals");
+    if (signals.length) {
+      signals.forEach((s) => {
+        const li = el("li");
+        li.appendChild(el("span", "sig-text", typeof s === "string" ? s : s.text));
+        if (s.points) li.appendChild(el("span", "sig-points", `+${s.points}`));
+        list.appendChild(li);
+      });
+    } else {
+      list.appendChild(
+        el(
+          "li",
+          "is-empty",
+          assessed
+            ? "Nothing flagged on this check."
+            : "Not checked: the article text couldn't be read."
+        )
+      );
+    }
+    item.appendChild(list);
+    if (score >= 30 && signals.length) item.open = true;
+    els.dimensions.appendChild(item);
+    fillBar(fill, assessed ? Math.max(2, score) : 0);
   });
 }
 
 function renderSignals(signals) {
-  clear(els.signals);
-  if (!signals.length) {
-    els.signals.appendChild(el("li", "is-empty", "No major clickbait signals detected."));
-    return;
-  }
-  signals.forEach((s) => els.signals.appendChild(el("li", null, s)));
+  listInto(els.signals, signals, "No major warning signals detected.");
 }
 
 function renderMetrics(d) {
   clear(els.metrics);
-  defRow(els.metrics, "Cosine similarity", d.cosine_similarity_score.toFixed(3));
-  defRow(els.metrics, "Sentiment polarity", d.sentiment_polarity.toFixed(3));
-  defRow(els.metrics, "Semantic gap", d.semantic_gap ? "Yes" : "No");
-  defRow(els.metrics, "Sensational tone", d.sensational_tone ? "Yes" : "No");
-  defRow(els.metrics, "Gap threshold", "< 0.350");
+  const m = d.evidence_metrics;
+  defRow(
+    els.metrics,
+    "Headline–body fit",
+    d.word_count ? `${Math.round(d.cosine_similarity_score * 100)}%` : "Not measured"
+  );
+  if (d.headline_model) {
+    defRow(
+      els.metrics,
+      "Clickbait-style headline",
+      `${Math.round(d.headline_model.probability * 100)}%`
+    );
+  }
+  defRow(els.metrics, "Headline sentiment", d.sentiment_polarity.toFixed(2));
+  if (m.attributions !== undefined)
+    defRow(els.metrics, "Attributed statements", String(m.attributions));
+  if (m.quotes !== undefined) defRow(els.metrics, "Direct quotes", String(m.quotes));
+  if (m.anonymous !== undefined) defRow(els.metrics, "Anonymous sourcing", String(m.anonymous));
+  if (m.evidence !== undefined) defRow(els.metrics, "Data / study references", String(m.evidence));
+  if (!d.dimensions.length) {
+    defRow(els.metrics, "Semantic gap", d.semantic_gap ? "Yes" : "No");
+    defRow(els.metrics, "Sensational tone", d.sensational_tone ? "Yes" : "No");
+  }
 }
 
 function renderArticleInfo(d) {
   clear(els.articleInfo);
-  defRow(els.articleInfo, "Source", d.source_domain || "Unknown");
-  defRow(els.articleInfo, "Published", d.published_at || "Not available");
+  defRow(els.articleInfo, "Publisher", d.site_name || d.source_domain || "Unknown");
+  defRow(els.articleInfo, "Published", formatDate(d.published_at));
   defRow(els.articleInfo, "Authors", d.authors.length ? d.authors.join(", ") : "Unknown");
   defRow(els.articleInfo, "Fetched via", VIA_LABELS[d.fetch_via] || d.fetch_via);
   defRow(els.articleInfo, "Extraction", d.extraction_method || "Unknown");
-  defRow(els.articleInfo, "Headline words", String(d.headline_word_count));
   defRow(els.articleInfo, "Article words", String(d.word_count));
-  defRow(els.articleInfo, "Read time", `${d.estimated_read_time_minutes} min`);
+  defRow(
+    els.articleInfo,
+    "Read time",
+    d.estimated_read_time_minutes ? `${d.estimated_read_time_minutes} min` : "—"
+  );
   defRow(els.articleInfo, "Numeric claims", String(d.numeric_claim_count));
 }
 
@@ -314,12 +519,6 @@ function renderIntel(d) {
   if (d.key_phrases.length) tagList(phraseRow, d.key_phrases);
   else phraseRow.appendChild(el("p", "intel-text muted", "Not available"));
   els.intel.appendChild(phraseRow);
-
-  const entRow = el("div", "intel-row");
-  entRow.appendChild(el("span", "intel-label", "Named entities"));
-  if (d.named_entities.length) tagList(entRow, d.named_entities);
-  else entRow.appendChild(el("p", "intel-text muted", "Not available"));
-  els.intel.appendChild(entRow);
 }
 
 function renderEntityGroups(groups) {
@@ -337,61 +536,128 @@ function renderEntityGroups(groups) {
   });
 }
 
-function renderSupporting(sentences) {
-  clear(els.supporting);
+function renderSentences(node, sentences, emptyText) {
+  clear(node);
   if (!sentences.length) {
-    els.supporting.appendChild(el("p", "muted", "No supporting sentences could be extracted."));
+    node.appendChild(el("p", "muted", emptyText));
     return;
   }
-  sentences.forEach((s) => els.supporting.appendChild(el("div", "sentence-card", s)));
+  sentences.forEach((s) => node.appendChild(el("div", "sentence-card", s)));
 }
 
 function renderResult(raw) {
   const d = normalizeApiResponse(raw);
-  const bucket = bucketFor(d.verdict);
+  lastResult = d;
 
   els.resultCard.classList.remove("hidden", "safe", "warning", "risky", "reveal");
-  els.resultCard.classList.add(bucket);
+  els.resultCard.classList.add(d.bucket);
   // Force reflow so the reveal animation replays on each analysis.
   void els.resultCard.offsetWidth;
   els.resultCard.classList.add("reveal");
 
   animateGauge(d.composite_sensationalism_score);
   els.verdictBadge.textContent = d.verdict;
+  renderTierScale(d.tier);
   els.summary.textContent = d.summary;
-  els.confidenceChip.textContent = `Confidence: ${d.legitimacy_confidence_score}%`;
+  els.confidenceChip.textContent = `Analysis confidence: ${d.analysis_confidence.score}%`;
+  clear(els.confidenceNotes);
+  d.analysis_confidence.notes.forEach((n) => els.confidenceNotes.appendChild(el("li", null, n)));
   els.engineChip.textContent = `Engine: ${d.engine}`;
   els.sourceChip.textContent = `Source: ${d.source_domain}`;
+  els.analyzedChip.textContent = `Analyzed: ${formatDate(d.analyzed_at)}`;
 
-  const prefix = d.headline_extracted ? "" : "(inferred) ";
-  els.headline.textContent = `${prefix}${d.headline || "Could not extract a clean headline."}`;
+  const headline = d.headline || "Could not extract a clean headline.";
+  renderHeadline(`${d.headline_extracted ? "" : "(inferred) "}${headline}`, d.headline_highlights);
+  renderContextLabels(d.context_labels);
   els.bodySnippet.textContent = d.body_snippet || "Body text was unavailable.";
 
-  renderBreakdown(d.score_breakdown);
+  renderDimensions(d);
+  listInto(
+    els.guidance,
+    d.guidance,
+    "Nothing stands out. Still, check the date and the outlet before sharing."
+  );
+  listInto(els.strengths, d.strengths, "Nothing notable.");
   renderSignals(d.signals);
+  renderSentences(els.claims, d.claims_to_verify, "No specific figures or claims stood out.");
   renderMetrics(d);
   renderArticleInfo(d);
   renderIntel(d);
   renderEntityGroups(d.entity_groups);
-  renderSupporting(d.supporting_sentences);
+  renderSentences(
+    els.supporting,
+    d.supporting_sentences,
+    "No sentence in the body clearly matches the headline."
+  );
 
+  els.copyStatus.textContent = "";
   els.emptyState.classList.add("hidden");
   els.resultCard.focus({ preventScroll: false });
 }
 
+/* ---------- Copy / share / print ---------- */
+function reportText(d) {
+  const lines = [
+    `BaitBlock verdict: ${d.verdict} (${d.composite_sensationalism_score}/100 risk)`,
+    `Headline: ${d.headline}`,
+    `Source: ${d.url || d.source_domain}`,
+    "",
+    d.summary,
+  ];
+  if (d.dimensions.length) {
+    lines.push("", "Inspection:");
+    d.dimensions.forEach((x) => lines.push(`  ${x.label}: ${x.score}/100`));
+  }
+  if (d.signals.length) lines.push("", "Signals:", ...d.signals.slice(0, 6).map((s) => `  - ${s}`));
+  if (d.guidance.length) lines.push("", "Before you share:", ...d.guidance.map((g) => `  - ${g}`));
+  lines.push("", `Analysis confidence: ${d.analysis_confidence.score}%`);
+  return lines.join("\n");
+}
+
+async function copyText(text, okMessage) {
+  try {
+    await navigator.clipboard.writeText(text);
+    els.copyStatus.textContent = okMessage;
+  } catch {
+    els.copyStatus.textContent = "Couldn't access the clipboard. Select and copy manually.";
+  }
+}
+els.copyReport.addEventListener("click", () => {
+  if (lastResult) copyText(reportText(lastResult), "Report copied to clipboard.");
+});
+els.copyLink.addEventListener("click", () => {
+  copyText(location.href, "Shareable link copied. It re-runs this check when opened.");
+});
+els.print.addEventListener("click", () => window.print());
+// Closed <details> stay hidden in print whatever the CSS says, so expand them.
+window.addEventListener("beforeprint", () => {
+  els.dimensions.querySelectorAll("details").forEach((d) => (d.open = true));
+});
+
 /* ---------- Submit flow ---------- */
 async function analyze() {
-  const url = els.input.value.trim();
   hideError();
+  const raw = els.input.value.trim();
 
-  if (!url) {
+  if (!raw) {
+    setInputInvalid(true);
     setStatus("Paste a URL first.", true);
     els.input.focus();
     return;
   }
-
+  const url = cleanUrl(raw);
+  if (!url) {
+    setInputInvalid(true);
+    setStatus(
+      "That doesn't look like a web address (it should start with http:// or https://).",
+      true
+    );
+    els.input.focus();
+    return;
+  }
+  els.input.value = url;
+  setInputInvalid(false);
   setLoading(true);
-  setStatus("Fetching article and checking deception signals…");
 
   try {
     const response = await fetch("/api/analyze", {
@@ -406,11 +672,12 @@ async function analyze() {
     }
 
     setLoading(false);
+    history.replaceState(null, "", `?url=${encodeURIComponent(url)}`);
     renderResult(data);
-    setStatus("Analysis complete.");
+    setStatus("Analysis complete. The verdict is below.");
   } catch (error) {
     setLoading(false);
-    els.emptyState.classList.add("hidden");
+    els.emptyState.classList.remove("hidden");
     setStatus("Something went wrong.", true);
     showError(error.message || "Could not analyze that URL. Please try another link.");
   }
@@ -420,3 +687,12 @@ els.form.addEventListener("submit", (event) => {
   event.preventDefault();
   analyze();
 });
+
+/* ---------- Deep link: /?url=… pre-fills and runs ---------- */
+(function runFromQuery() {
+  const shared = new URLSearchParams(location.search).get("url");
+  if (shared) {
+    els.input.value = shared;
+    analyze();
+  }
+})();

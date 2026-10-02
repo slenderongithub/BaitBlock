@@ -9,6 +9,9 @@
  * intentionally unchanged by this refactor.
  */
 
+const cheerio = require("cheerio");
+const { Readability } = require("@mozilla/readability");
+const { parseHTML } = require("linkedom");
 const { normalizeWhitespace, getTokens } = require("./textUtils");
 
 function parseJsonLdNodes($) {
@@ -55,7 +58,7 @@ function extractPublishedAt($, jsonLdNodes) {
     if (dateValue) return dateValue;
   }
 
-  return "Not available";
+  return "";
 }
 
 function extractAuthors($, jsonLdNodes) {
@@ -102,6 +105,40 @@ function extractMetaDescription($) {
   );
 }
 
+function extractSiteName($, jsonLdNodes) {
+  const meta =
+    $("meta[property='og:site_name']").attr("content") ||
+    $("meta[name='application-name']").attr("content") ||
+    "";
+  if (normalizeWhitespace(meta)) return normalizeWhitespace(meta);
+  for (const node of jsonLdNodes) {
+    const pub = node.publisher;
+    const name = normalizeWhitespace((pub && (pub.name || (typeof pub === "string" && pub))) || "");
+    if (name) return name;
+  }
+  return "";
+}
+
+/** Schema.org / Open Graph type of the page, e.g. "NewsArticle", "OpinionNewsArticle". */
+function extractArticleType($, jsonLdNodes) {
+  const types = jsonLdNodes
+    .map((n) => (Array.isArray(n["@type"]) ? n["@type"].join(" ") : n["@type"] || ""))
+    .filter((t) => /article|posting|report/i.test(String(t)));
+  return normalizeWhitespace(types[0] || $("meta[property='og:type']").attr("content") || "");
+}
+
+/** Section / kicker labels publishers attach in metadata (used for sponsored/opinion cues). */
+function extractLabels($) {
+  return [
+    $("meta[property='article:section']").attr("content"),
+    $("meta[name='parsely-section']").attr("content"),
+    $("meta[property='article:content_tier']").attr("content"),
+    $("meta[name='sailthru.tags']").attr("content"),
+  ]
+    .map((v) => normalizeWhitespace(v || ""))
+    .filter(Boolean);
+}
+
 function extractTitle($) {
   const ogTitle = $("meta[property='og:title']").attr("content") || "";
   const twitterTitle = $("meta[name='twitter:title']").attr("content") || "";
@@ -113,7 +150,7 @@ function extractTitle($) {
 
 function sanitizeTextBlock(text = "") {
   return normalizeWhitespace(text)
-    .replace(/[{}[\]"]+/g, " ")
+    .replace(/[{}[\]]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -221,7 +258,45 @@ function extractBodyFromJsonLd(jsonLdNodes) {
   return "";
 }
 
-function extractBodyText($, jsonLdNodes) {
+/**
+ * Mozilla Readability (Firefox Reader View's algorithm) over the raw HTML.
+ * It scores blocks by text density whatever the tag, so it finds articles
+ * whose paragraphs are <div>/<span> (BuzzFeed, many Next.js CMSes) where the
+ * <p>-based selectors see nothing. Block boundaries are kept as sentence ends.
+ */
+function extractWithReadability(html) {
+  if (!html) return "";
+  try {
+    const { document } = parseHTML(html);
+    const article = new Readability(document, { charThreshold: 200 }).parse();
+    if (!article || !article.content) return "";
+    const $r = cheerio.load(
+      article.content.replace(
+        /<\/(p|div|li|h[1-6]|blockquote|section|article|tr|figcaption)>/gi,
+        "$&\n"
+      )
+    );
+    $r("script, style, button, svg").remove();
+    return $r
+      .root()
+      .text()
+      .split("\n")
+      .map((line) => normalizeWhitespace(line))
+      .filter((line) => line.length > 1 && !isNoisyTextCandidate(line))
+      .map((line) => (/[.!?:;"\u201d')\]]$/.test(line) ? line : `${line}.`))
+      .join(" ");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Best readable body text. Order: publisher-declared JSON-LD articleBody ->
+ * <p> selectors (cleanest when they capture most of the article) ->
+ * Readability -> generic paragraph fallbacks.
+ * @param {string} [html] raw page HTML (defaults to $.html() before pruning)
+ */
+function extractBodyText($, jsonLdNodes, html = $.html()) {
   pruneNoisyDom($);
 
   const jsonLdBody = extractBodyFromJsonLd(jsonLdNodes);
@@ -243,28 +318,34 @@ function extractBodyText($, jsonLdNodes) {
     ".content p",
   ];
 
+  let bySelector = null;
   for (const selector of selectors) {
     const paragraphs = $(selector)
       .map((_, el) => sanitizeTextBlock($(el).text()))
       .get()
       .filter(isReadableParagraph);
 
-    const text = normalizeWhitespace(paragraphs.slice(0, 18).join(" "));
+    const text = normalizeWhitespace(paragraphs.slice(0, 40).join(" "));
 
     if (!text) continue;
-
-    const textWords = getTokens(text).length;
-    if (textWords < 80) continue;
-
+    if (getTokens(text).length < 80) continue;
     if (isNoisyTextCandidate(text)) continue;
 
     if (text.length > 200) {
-      return {
-        bodyText: text,
-        extractionMethod: `Paragraph extraction (${selector})`,
-      };
+      bySelector = { bodyText: text, extractionMethod: `Paragraph extraction (${selector})` };
+      break;
     }
   }
+
+  const readable = extractWithReadability(html);
+  const readableWords = getTokens(readable).length;
+  if (bySelector && getTokens(bySelector.bodyText).length >= readableWords * 0.7) {
+    return bySelector;
+  }
+  if (readableWords >= 40) {
+    return { bodyText: readable, extractionMethod: "Readability (reader view)" };
+  }
+  if (bySelector) return bySelector;
 
   const fallbackParagraphs = $("p")
     .map((_, el) => sanitizeTextBlock($(el).text()))
@@ -303,6 +384,10 @@ module.exports = {
   extractMetaDescription,
   extractTitle,
   extractBodyText,
+  extractWithReadability,
+  extractSiteName,
+  extractArticleType,
+  extractLabels,
   // exported for unit testing
   sanitizeTextBlock,
   isNoisyTextCandidate,

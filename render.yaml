@@ -47,6 +47,8 @@ services:
         value: "60000"
       - key: CLICKBAIT_RATE_MAX
         value: "20"
+      - key: CLICKBAIT_MAX_CONCURRENT
+        value: "4" # small instance: keep memory headroom
 
       # --- Tiered acquisition ---
       - key: CLICKBAIT_RESPECT_ROBOTS
@@ -72,3 +74,5 @@ services:
         value: "20000"
       - key: CLICKBAIT_HEADLESS_NETWORKIDLE_MS
         value: "3000"
+      - key: CLICKBAIT_HEADLESS_MAX_CONCURRENT
+        value: "1" # one Chromium page at a time on 512MB

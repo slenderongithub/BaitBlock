@@ -16,7 +16,8 @@
  * errors on non-OK / non-HTML responses.
  */
 
-const { assertUrlAllowed } = require("./ssrfGuard");
+const { Agent, fetch } = require("undici");
+const { assertUrlAllowed, guardedLookup } = require("./ssrfGuard");
 const config = require("./config");
 const { FetchError } = require("./errors");
 
@@ -32,6 +33,9 @@ const BROWSER_HEADERS = {
   "Sec-Fetch-User": "?1",
   "Upgrade-Insecure-Requests": "1",
 };
+
+// Every outbound socket resolves through the SSRF guard (DNS-rebinding safe).
+const dispatcher = new Agent({ connect: { lookup: guardedLookup } });
 
 function isAllowedContentType(headerValue) {
   if (!headerValue) return true; // Be lenient when the server omits it.
@@ -50,7 +54,10 @@ async function readCapped(response, maxBytes) {
 
   const body = response.body;
   if (!body) {
-    return await response.text();
+    return decodeBody(
+      Buffer.from(await response.arrayBuffer()),
+      response.headers.get("content-type")
+    );
   }
 
   const reader = body.getReader();
@@ -71,7 +78,23 @@ async function readCapped(response, maxBytes) {
     reader.releaseLock();
   }
 
-  return Buffer.concat(chunks).toString("utf8");
+  return decodeBody(Buffer.concat(chunks), response.headers.get("content-type"));
+}
+
+/**
+ * Decode with the page's declared charset (Content-Type header, else a
+ * <meta charset> in the first 2 KB), falling back to UTF-8. Hard-coding UTF-8
+ * garbles windows-1252 / Shift_JIS / GBK pages.
+ */
+function decodeBody(buffer, contentType = "") {
+  const declared =
+    /charset=["']?([\w-]+)/i.exec(contentType || "") ||
+    /<meta[^>]+charset=["']?([\w-]+)/i.exec(buffer.subarray(0, 2048).toString("latin1"));
+  try {
+    return new TextDecoder(declared ? declared[1] : "utf-8").decode(buffer);
+  } catch {
+    return buffer.toString("utf8"); // unknown label
+  }
 }
 
 /**
@@ -107,11 +130,13 @@ async function safeHttpGet(rawUrl, { headers = BROWSER_HEADERS } = {}) {
           headers,
           redirect: "manual",
           signal: controller.signal,
+          dispatcher,
         });
       } catch (err) {
         if (err.name === "AbortError") {
           throw new FetchError("The article took too long to respond.", 504);
         }
+        if (err.cause instanceof FetchError) throw err.cause; // blocked at connect time
         throw new FetchError(
           "Could not reach that URL. The site may be down or blocking requests.",
           502
@@ -181,6 +206,7 @@ module.exports = {
   safeFetchArticle,
   safeHttpGet,
   isAllowedContentType,
+  decodeBody,
   BROWSER_HEADERS,
   FetchError,
 };

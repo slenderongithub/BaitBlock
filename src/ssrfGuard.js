@@ -15,13 +15,14 @@
  *      address falls in a private/reserved/loopback/link-local range.
  *   4. Re-run this check on every redirect hop (done in safeFetch.js).
  *
- * Residual risk: DNS rebinding (a hostname that resolves to a public IP at
- * validation time and a private IP at fetch time) is not fully closed here —
- * that would require pinning the connection to the validated IP. For a
- * best-effort heuristic tool this is an accepted, documented trade-off.
+ *   5. Re-check at connect time: `guardedLookup` is the socket's DNS resolver
+ *      (wired into safeFetch's undici Agent), so the address actually dialled
+ *      is the one validated. This closes DNS rebinding, where a hostname
+ *      answers public at validation time and private at fetch time.
  */
 
-const dns = require("dns").promises;
+const dnsCb = require("dns");
+const dns = dnsCb.promises;
 const ipaddr = require("ipaddr.js");
 const config = require("./config");
 const { FetchError } = require("./errors");
@@ -98,7 +99,11 @@ async function assertUrlAllowed(parsedUrl) {
 
   for (const pattern of BLOCKED_HOSTNAME_PATTERNS) {
     if (pattern.test(hostname)) {
-      throw new FetchError("Refusing to fetch an internal or reserved hostname.");
+      throw new FetchError(
+        "Refusing to fetch an internal or reserved hostname.",
+        400,
+        "ssrf_blocked"
+      );
     }
   }
 
@@ -106,7 +111,7 @@ async function assertUrlAllowed(parsedUrl) {
   if (ipaddr.isValid(hostname)) {
     const verdict = classifyAddress(hostname);
     if (verdict !== true) {
-      throw new FetchError("Refusing to fetch a private or reserved address.");
+      throw new FetchError("Refusing to fetch a private or reserved address.", 400, "ssrf_blocked");
     }
     return;
   }
@@ -126,9 +131,29 @@ async function assertUrlAllowed(parsedUrl) {
   for (const { address } of records) {
     const verdict = classifyAddress(address);
     if (verdict !== true) {
-      throw new FetchError("Refusing to fetch a private or reserved address.");
+      throw new FetchError("Refusing to fetch a private or reserved address.", 400, "ssrf_blocked");
     }
   }
 }
 
-module.exports = { assertUrlAllowed, classifyAddress };
+/**
+ * Drop-in `lookup` for net.connect that refuses private/reserved answers, so
+ * validation and connection use the same DNS result.
+ */
+function guardedLookup(hostname, options, callback) {
+  dnsCb.lookup(hostname, { ...options, all: true }, (err, addresses) => {
+    if (err) return callback(err);
+    if (!config.ssrf.allowPrivateAddresses) {
+      const bad = addresses.find((a) => classifyAddress(a.address) !== true);
+      if (bad) {
+        return callback(
+          new FetchError("Refusing to fetch a private or reserved address.", 400, "ssrf_blocked")
+        );
+      }
+    }
+    if (options && options.all) return callback(null, addresses);
+    return callback(null, addresses[0].address, addresses[0].family);
+  });
+}
+
+module.exports = { assertUrlAllowed, classifyAddress, guardedLookup };

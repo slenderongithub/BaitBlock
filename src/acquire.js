@@ -4,16 +4,23 @@
  * Tiered article acquisition. Tries progressively heavier strategies and stops
  * at the first that yields a *usable* article (a real title + enough body):
  *
- *   0. Direct HTTP with browser headers        (safeFetch)
+ *   0. Direct HTTP with browser headers, one retry on transient failure (safeFetch)
  *   1. Readable-alt routes: AMP version, RSS/Atom feed item   (altRoutes)
- *   2. Headless browser render (Playwright)     (headless)   [live-only]
+ *   2. Headless browser render (Playwright / installed Chrome)   (headless)  [live-only]
  *   3. Public archive snapshot (Wayback)        (archive)    [robots-exempt]
  *
- * Cross-cutting: robots.txt compliance for the live tiers, per-domain
- * politeness, and an in-memory response cache. Every network hop stays behind
- * the SSRF guard (via safeHttpGet / headless's own validation).
+ * If no tier yields a full article it degrades instead of failing:
+ *   - partial: the best real page seen (title + whatever body it had), or
+ *   - url-only: the headline words in the link slug, when the site walls off
+ *     automated readers entirely (403/challenge) and no archive copy exists.
+ * Both are flagged (`partial`) so the analysis reports low confidence.
+ * Pages that genuinely don't exist (404/410) still fail with a clear error.
  *
- * Returns { html, finalUrl, via } — `via` records which tier succeeded.
+ * Cross-cutting: tracking parameters stripped (canonical URL), robots.txt for
+ * live tiers, per-domain politeness, in-memory cache. Every network hop stays
+ * behind the SSRF guard (via safeHttpGet / headless's own validation).
+ *
+ * Returns { html, finalUrl, via, partial? }.
  */
 
 const cheerio = require("cheerio");
@@ -29,7 +36,7 @@ const politeness = require("./politeness");
 const altRoutes = require("./altRoutes");
 const archive = require("./archive");
 
-// Lazy so the app still boots if Playwright/its browser isn't installed.
+// Lazy so the app still boots if Playwright isn't installed.
 let headlessMod = null;
 function headless() {
   if (headlessMod === null) {
@@ -42,22 +49,55 @@ function headless() {
   return headlessMod;
 }
 
+// Query params that only track the click. Stripping them gives one cache entry
+// per story, and some robots.txt files disallow exactly these variants
+// (e.g. Al Jazeera: Disallow: /*?traffic_source=).
+const TRACKING_PARAM =
+  /^(utm_\w+|fbclid|gclid|dclid|msclkid|mc_cid|mc_eid|igshid|traffic_source|at_medium|at_campaign|ns_\w+|ito|cmpid|ocid|smid|sref|ref_src|guccounter)$/i;
+
+function canonicalUrl(rawUrl) {
+  const u = new URL(rawUrl);
+  [...u.searchParams.keys()].forEach((k) => TRACKING_PARAM.test(k) && u.searchParams.delete(k));
+  u.hash = "";
+  return u.toString();
+}
+
+// Bot-wall / interstitial pages that must never be analyzed as the article.
+const CHALLENGE_TITLE =
+  /just a moment|access denied|attention required|are you a (robot|human)|confirm you are human|verify you are human|human verification|security check|pardon our interruption|request blocked|captcha|403 forbidden|404 not found|page not found|^(\w+\.)?\w+\.(com|org|net)$/i;
+
 function probe(html) {
   try {
     const $ = cheerio.load(html);
     const jsonLd = parseJsonLdNodes($);
     const title = extractTitle($);
-    const { bodyText } = extractBodyText($, jsonLd);
+    const { bodyText } = extractBodyText($, jsonLd, html);
     return { title, words: getTokens(bodyText).length };
   } catch {
     return { title: "", words: 0 };
   }
 }
 
-function usable(html) {
-  if (!html) return false;
-  const { title, words } = probe(html);
-  return Boolean(title) && words >= config.fetch.minBodyWords;
+const isChallenge = (title) => !title || CHALLENGE_TITLE.test(title.trim());
+
+/** Headline from a descriptive slug: /2026/10/nikki-glaser-apology-joke -> "Nikki glaser apology joke". */
+function headlineFromSlug(url) {
+  const segments = new URL(url).pathname
+    .split("/")
+    .map((s) => decodeURIComponent(s).replace(/\.\w{2,5}$/, ""))
+    .filter(Boolean);
+  const best = segments
+    .map((s) =>
+      s
+        .split(/[-_]+/)
+        .filter(
+          (w) => /^[a-z']+$/i.test(w) && !/^(html?|php|amp|index|story|article|news)$/i.test(w)
+        )
+    )
+    .sort((a, b) => b.length - a.length)[0];
+  if (!best || best.length < 3) return "";
+  const text = best.join(" ").toLowerCase();
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
@@ -65,19 +105,45 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, (c) => ESCAPES[c]);
 }
 
+const TRANSIENT = new Set([408, 425, 429, 500, 502, 503, 504]);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Tier 0 with one retry on a transient network/HTTP failure. */
+async function directFetch(url, host) {
+  for (let attempt = 0; ; attempt += 1) {
+    await politeness.waitTurn(host);
+    try {
+      const r = await safeHttpGet(url);
+      if (attempt === 0 && TRANSIENT.has(r.status)) {
+        await sleep(1000);
+        continue;
+      }
+      return r;
+    } catch (err) {
+      const transient = err instanceof FetchError && (err.status === 502 || err.status === 504);
+      if (attempt === 0 && transient) {
+        await sleep(1000);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 /**
  * @param {string} rawUrl
- * @returns {Promise<{ html: string, finalUrl: string, via: string }>}
+ * @returns {Promise<{ html: string, finalUrl: string, via: string, partial?: boolean }>}
  */
 async function acquireArticle(rawUrl) {
-  let target;
+  let url;
   try {
-    target = new URL(rawUrl);
+    url = canonicalUrl(rawUrl);
   } catch {
     throw new FetchError("URL format is invalid.", 400);
   }
+  const target = new URL(url);
 
-  const cached = cache.get(rawUrl);
+  const cached = cache.get(url);
   if (cached) return cached;
 
   // Enforce the SSRF / protocol policy up front so a blocked URL fails cleanly
@@ -86,26 +152,39 @@ async function acquireArticle(rawUrl) {
   await assertUrlAllowed(target);
 
   const done = (result) => {
-    cache.set(rawUrl, result);
+    cache.set(url, result);
     return result;
   };
 
-  const ua = config.fetch.userAgent;
-  const allowLive = await robots.isAllowed(rawUrl, ua);
+  const statuses = []; // HTTP statuses seen from the live origin
+  let partial = null; // best real (non-challenge) page that wasn't fully usable
+  const consider = (html, finalUrl, via) => {
+    if (!html) return false;
+    const p = probe(html);
+    if (isChallenge(p.title)) return false;
+    if (p.words >= config.fetch.minBodyWords) return true;
+    if (!partial || p.words > partial.words) partial = { html, finalUrl, via, words: p.words };
+    return false;
+  };
 
+  const allowLive = await robots.isAllowed(url, config.fetch.userAgent);
   let seedHtml = null;
-  let seedUrl = rawUrl;
+  let seedUrl = url;
   let snapshotHint = null;
 
   if (allowLive) {
     // Tier 0 — direct HTTP with browser headers.
     try {
-      await politeness.waitTurn(target.hostname);
-      const r = await safeHttpGet(rawUrl);
-      seedHtml = r.html;
-      seedUrl = r.finalUrl;
-      if (r.ok && isAllowedContentType(r.contentType) && usable(r.html)) {
-        return done({ html: r.html, finalUrl: r.finalUrl, via: "http" });
+      const r = await directFetch(url, target.hostname);
+      statuses.push(r.status);
+      if (r.ok && isAllowedContentType(r.contentType)) {
+        seedHtml = r.html;
+        seedUrl = r.finalUrl;
+        if (consider(r.html, r.finalUrl, "http")) {
+          return done({ html: r.html, finalUrl: r.finalUrl, via: "http" });
+        }
+      } else if (r.html) {
+        seedHtml = r.html; // a 403 page can still advertise AMP / feed links
       }
     } catch {
       /* escalate */
@@ -118,7 +197,7 @@ async function acquireArticle(rawUrl) {
         try {
           await politeness.waitTurn(new URL(ampUrl).hostname);
           const r = await safeHttpGet(ampUrl);
-          if (r.ok && usable(r.html)) {
+          if (r.ok && consider(r.html, r.finalUrl, "amp")) {
             return done({ html: r.html, finalUrl: r.finalUrl, via: "amp" });
           }
         } catch {
@@ -135,7 +214,7 @@ async function acquireArticle(rawUrl) {
             const wrapped =
               `<!doctype html><html><head><title>${escapeHtml(item.title)}</title></head>` +
               `<body><h1>${escapeHtml(item.title)}</h1>${item.html || ""}</body></html>`;
-            if (usable(wrapped)) {
+            if (consider(wrapped, seedUrl, "feed")) {
               return done({ html: wrapped, finalUrl: seedUrl, via: "feed" });
             }
           }
@@ -145,17 +224,15 @@ async function acquireArticle(rawUrl) {
       }
     }
 
-    // Tier 2 — headless browser render.
+    // Tier 2 — headless browser render. Skipped for a confirmed 404/410.
     const h = headless();
-    if (h && config.fetch.headless.enabled) {
+    const gone = statuses.length && statuses.every((s) => s === 404 || s === 410);
+    if (h && config.fetch.headless.enabled && !gone) {
       try {
-        const r = await h.renderArticle(rawUrl);
-        if (usable(r.html)) {
+        const r = await h.renderArticle(url);
+        if (r.status) statuses.push(r.status);
+        if (consider(r.html, r.finalUrl, "headless")) {
           return done({ html: r.html, finalUrl: r.finalUrl, via: "headless" });
-        }
-        if (!seedHtml) {
-          seedHtml = r.html;
-          seedUrl = r.finalUrl;
         }
       } catch {
         /* escalate */
@@ -166,16 +243,42 @@ async function acquireArticle(rawUrl) {
   // Tier 3 — public archive (exempt from the origin's robots: a separate copy).
   if (config.fetch.archive.enabled) {
     try {
-      const r = await archive.fetchFromArchive(rawUrl);
+      const r = await archive.fetchFromArchive(url);
       if (r) {
         snapshotHint = r.snapshotUrl || null;
-        if (usable(r.html)) {
+        if (consider(r.html, r.finalUrl, "wayback")) {
           return done({ html: r.html, finalUrl: r.finalUrl, via: "wayback" });
         }
       }
     } catch {
-      /* fall through to the failure message */
+      /* fall through */
     }
+  }
+
+  // ---- Degrade instead of failing ----
+  if (partial) {
+    return done({
+      html: partial.html,
+      finalUrl: partial.finalUrl,
+      via: partial.via,
+      partial: true,
+    });
+  }
+
+  if (statuses.length && statuses.every((s) => s === 404 || s === 410)) {
+    throw new FetchError(
+      `That page doesn't exist (HTTP ${statuses[0]}). Check the link — it may have been moved or deleted.`,
+      404
+    );
+  }
+
+  const slugHeadline = headlineFromSlug(url);
+  if (slugHeadline) {
+    const html =
+      `<!doctype html><html><head><title>${escapeHtml(slugHeadline)}</title></head>` +
+      `<body><h1>${escapeHtml(slugHeadline)}</h1></body></html>`;
+    // Not cached: a later attempt may get the real page.
+    return { html, finalUrl: url, via: "url-only", partial: true };
   }
 
   const hint = snapshotHint ? ` A public archive snapshot exists: ${snapshotHint}` : "";
@@ -185,10 +288,13 @@ async function acquireArticle(rawUrl) {
       502
     );
   }
+  const blocked = statuses.some((s) => [401, 403, 405, 429, 451].includes(s));
   throw new FetchError(
-    `Could not extract a readable article (tried direct fetch, AMP, headless browser, and web archive).${hint}`,
+    blocked
+      ? `The site blocks automated readers (HTTP ${statuses.find((s) => s >= 400)}) and no archive copy exists yet.${hint}`
+      : `Could not extract a readable article (tried direct fetch, AMP, RSS, headless browser, and web archive).${hint}`,
     502
   );
 }
 
-module.exports = { acquireArticle };
+module.exports = { acquireArticle, canonicalUrl, headlineFromSlug, isChallenge };

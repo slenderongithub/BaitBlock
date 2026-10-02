@@ -19,92 +19,91 @@ const {
   extractMetaDescription,
   extractPublishedAt,
   extractAuthors,
+  extractSiteName,
+  extractArticleType,
+  extractLabels,
 } = require("./extraction");
 const {
   extractKeyPhrases,
-  extractNamedEntities,
   groupEntities,
   extractSupportingSentences,
+  extractClaims,
 } = require("./nlp");
-const { computeScore, buildSummary, classifyScore } = require("./scoring");
+const { computeScore } = require("./scoring");
 
 /**
  * Analyze a single article URL.
  * @param {string} url
- * @param {{ fetchArticle?: (url: string) => Promise<{ html: string, finalUrl: string }> }} [deps]
+ * @param {{ fetchArticle?: (url: string) => Promise<{ html: string, finalUrl: string, via?: string }> }} [deps]
  * @returns {Promise<object>} the JSON response payload
  */
 async function analyzeUrl(url, deps = {}) {
   const fetchArticle = deps.fetchArticle || acquireArticle;
 
-  const { html, finalUrl, via } = await fetchArticle(url);
+  const { html, finalUrl, via, partial } = await fetchArticle(url);
   const parsed = new URL(finalUrl);
 
   const $ = cheerio.load(html);
   const jsonLdNodes = parseJsonLdNodes($);
 
+  // Metadata first: extractBodyText prunes the DOM.
   const title = extractTitle($);
-  const { bodyText, extractionMethod } = extractBodyText($, jsonLdNodes);
   const metaDescription = extractMetaDescription($);
   const publishedAt = extractPublishedAt($, jsonLdNodes);
   const authors = extractAuthors($, jsonLdNodes);
-  const keyPhrases = extractKeyPhrases(bodyText, title);
-  const namedEntities = extractNamedEntities(title, bodyText);
-  const entityGroups = groupEntities(namedEntities);
-  const supportingSentences = extractSupportingSentences(bodyText);
-  const bodySnippet = normalizeWhitespace(bodyText).slice(0, 300) || "Body text was unavailable.";
+  const siteName = extractSiteName($, jsonLdNodes);
+  const articleType = extractArticleType($, jsonLdNodes);
+  const labels = extractLabels($);
+  const { bodyText, extractionMethod } = extractBodyText($, jsonLdNodes, html);
 
+  const assessment = computeScore(title, bodyText, {
+    authors,
+    publishedAt,
+    siteName,
+    articleType,
+    labels,
+    hostname: parsed.hostname,
+    protocol: parsed.protocol,
+    urlPath: parsed.pathname,
+    fetchVia: via,
+    extractionMethod,
+    partial: Boolean(partial),
+  });
+
+  const entityGroups = groupEntities(title, bodyText);
+  const supportingSentences = extractSupportingSentences(bodyText, title);
   const wordCount = getTokens(bodyText).length;
-  const headlineWordCount = getTokens(title).length;
-  const numericClaimCount = (bodyText.match(/\b\d+(?:\.\d+)?%?\b/g) || []).length;
-  const estimatedReadTimeMinutes = Math.max(1, Math.round(wordCount / 220));
-
-  const {
-    score,
-    signals,
-    scoreBreakdown,
-    cosineSimilarityScore,
-    sentimentPolarity,
-    semanticGap,
-    sensationalTone,
-  } = computeScore(title, bodyText);
-
-  const { bucket, verdict } = classifyScore(score);
-  const confidence = Math.max(0, Math.min(100, 100 - score));
 
   return {
     url: parsed.toString(),
     title,
     headline: title,
     headline_extracted: Boolean(title),
-    score,
-    bucket,
-    verdict,
-    composite_sensationalism_score: score,
-    legitimacy_confidence_score: confidence,
-    summary: buildSummary(score),
-    signals: signals.slice(0, 6),
-    body_snippet: bodySnippet,
+    ...assessment,
+    composite_sensationalism_score: assessment.score,
+    legitimacy_confidence_score: 100 - assessment.score,
+    signals: assessment.signals.slice(0, 8),
+    body_snippet: normalizeWhitespace(bodyText).slice(0, 300) || "Body text was unavailable.",
     source_domain: parsed.hostname,
-    published_at: publishedAt,
+    site_name: siteName || null,
+    article_type: articleType || null,
+    published_at: publishedAt || "Not available",
     authors,
     extraction_method: extractionMethod,
-    headline_word_count: headlineWordCount,
+    headline_word_count: getTokens(title).length,
     word_count: wordCount,
-    estimated_read_time_minutes: estimatedReadTimeMinutes,
-    numeric_claim_count: numericClaimCount,
-    score_breakdown: scoreBreakdown,
-    key_phrases: keyPhrases,
-    named_entities: namedEntities,
+    estimated_read_time_minutes: wordCount ? Math.max(1, Math.round(wordCount / 220)) : 0,
+    numeric_claim_count: (bodyText.match(/\b\d+(?:\.\d+)?%?\b/g) || []).length,
+    key_phrases: extractKeyPhrases(bodyText, title),
+    named_entities: Object.values(entityGroups).flat().slice(0, 12),
     entity_groups: entityGroups,
     supporting_sentences: supportingSentences,
-    cosine_similarity_score: cosineSimilarityScore,
-    sentiment_polarity: sentimentPolarity,
-    semantic_gap: semanticGap,
-    sensational_tone: sensationalTone,
+    claims_to_verify: extractClaims(bodyText, supportingSentences),
     meta_description: metaDescription || "Not available",
     fetch_via: via || "direct fetch",
-    engine: "node-heuristic",
+    partial: Boolean(partial),
+    analyzed_at: new Date().toISOString(),
+    engine: "node-nlp",
   };
 }
 

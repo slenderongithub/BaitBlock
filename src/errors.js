@@ -6,10 +6,12 @@
  * treating these as unexpected 500s.
  */
 class FetchError extends Error {
-  constructor(message, status = 400) {
+  /** @param {string} [code] machine-readable tag, e.g. "ssrf_blocked" (used for security logging) */
+  constructor(message, status = 400, code = undefined) {
     super(message);
     this.name = "FetchError";
     this.status = status;
+    this.code = code;
   }
 }
 

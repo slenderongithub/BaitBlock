@@ -50,6 +50,7 @@
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
+    <div class="scroll-progress" aria-hidden="true"><span id="scrollProgress"></span></div>
 
     <!-- ============ MASTHEAD ============ -->
     <header class="site-header">
@@ -127,6 +128,9 @@
               spellcheck="false"
               placeholder="https://example.com/news-story"
               aria-describedby="statusText"
+              aria-invalid="false"
+              maxlength="2048"
+              required
             />
             <button id="analyzeBtn" type="submit">
               <span class="btn-label">Investigate</span>
@@ -189,72 +193,110 @@
               <span class="step-num" aria-hidden="true">1</span>
               <div>
                 <strong>Fetch</strong>
-                <p>We download the article server-side and pull out the headline and body.</p>
+                <p>
+                  We download the article server-side (falling back to AMP, RSS, a headless browser
+                  or the web archive) and pull out the headline, body, byline and metadata.
+                </p>
               </div>
             </li>
             <li>
               <span class="step-num" aria-hidden="true">2</span>
               <div>
-                <strong>Compare</strong>
+                <strong>Inspect</strong>
                 <p>
-                  We check how well the headline matches the article and scan for hype patterns.
+                  Six independent checks: headline bait, sensational tone, headline-vs-body fit,
+                  sourcing, transparency, and scam or manipulation tactics.
                 </p>
               </div>
             </li>
             <li>
               <span class="step-num" aria-hidden="true">3</span>
               <div>
-                <strong>Score</strong>
-                <p>You get a 0–100 risk score with the exact signals behind it.</p>
+                <strong>Rule</strong>
+                <p>
+                  A 0–100 risk score, a verdict that names the <em>kind</em> of problem, the exact
+                  evidence behind it, and what to check before you share.
+                </p>
               </div>
             </li>
           </ol>
 
           <aside class="almanac">
-            <h3 class="almanac-title">The BaitBlock Method</h3>
+            <h3 class="almanac-title">The Verdict Scale</h3>
             <dl class="almanac-list">
               <div>
-                <dt>Semantic gap</dt>
-                <dd>+18</dd>
+                <dt>Straight Reporting</dt>
+                <dd>0–19</dd>
               </div>
               <div>
-                <dt>Bait phrase</dt>
-                <dd>+14</dd>
+                <dt>Likely Legit</dt>
+                <dd>20–39</dd>
               </div>
               <div>
-                <dt>Sensational tone</dt>
-                <dd>+12</dd>
+                <dt>Borderline</dt>
+                <dd>40–59</dd>
               </div>
               <div>
-                <dt>Teaser not echoed</dt>
-                <dd>+12</dd>
+                <dt>High risk, named by concern</dt>
+                <dd>60–79</dd>
               </div>
               <div>
-                <dt>ALL-CAPS shouting</dt>
-                <dd>+10</dd>
-              </div>
-              <div>
-                <dt>Deception hint</dt>
-                <dd>+10</dd>
-              </div>
-              <div>
-                <dt>Gap threshold</dt>
-                <dd>&lt; 0.35</dd>
-              </div>
-              <div>
-                <dt>Clickbait cutoff</dt>
-                <dd>&ge; 70</dd>
-              </div>
-              <div>
-                <dt>Borderline cutoff</dt>
-                <dd>&ge; 40</dd>
+                <dt>Severe risk</dt>
+                <dd>80+</dd>
               </div>
             </dl>
             <p class="almanac-note">
-              Points accumulate toward a 0–100 risk score. Verdicts: 0–39 Likely Legit · 40–69
-              Borderline · 70–100 Clickbait.
+              High-risk verdicts say <em>what</em> is wrong: Clickbait, Sensationalist, Misleading
+              Headline, Unsubstantiated, Low Transparency or Manipulative. Satire and sponsored
+              content are labelled as such.
             </p>
           </aside>
+        </div>
+
+        <div class="section-banner faq-banner">
+          <span class="section-banner-label">Letters To The Editor</span>
+        </div>
+        <div class="faq">
+          <details>
+            <summary>Is this a fact-checker?</summary>
+            <p>
+              No. BaitBlock judges how a story is <em>framed and sourced</em>, not whether its facts
+              are true. A well-written article can still be wrong, and a clumsy one can be right.
+              Use the verdict as a reason to read carefully, then verify the claims it lists.
+            </p>
+          </details>
+          <details>
+            <summary>How accurate is the headline check?</summary>
+            <p>
+              The headline-style model is a logistic regression trained on the public "Stop
+              Clickbait" corpus (32,000 labelled headlines). On 6,400 held-out headlines it scores
+              98% accuracy. It is combined with explainable rules, so every point of the score
+              traces back to a specific signal you can read.
+            </p>
+          </details>
+          <details>
+            <summary>Why is one red flag enough for a high score?</summary>
+            <p>
+              Dimensions combine like independent alarms: one strong signal (a fake outlet domain, a
+              miracle-cure pitch) raises the score on its own, several moderate ones compound, and
+              faint noise across many checks is ignored.
+            </p>
+          </details>
+          <details>
+            <summary>What does "analysis confidence" mean?</summary>
+            <p>
+              How much text we had to work with. A missing headline, a very short body, a
+              non-English page or a summary-only RSS copy all lower it. Treat low-confidence results
+              as rough.
+            </p>
+          </details>
+          <details>
+            <summary>Do you store the links I check?</summary>
+            <p>
+              No accounts, no cookies, no database. Fetched pages are cached in memory for a few
+              minutes so a retry is fast, then discarded.
+            </p>
+          </details>
         </div>
       </section>
 
@@ -267,11 +309,23 @@
         <div class="headline-splash">
           <span class="kicker-label">Today's Headline, On Trial</span>
           <p id="headlineText" class="headline-text">—</p>
+          <p id="highlightLegend" class="highlight-legend hidden">
+            <mark>Highlighted</mark> words triggered the headline checks.
+          </p>
+          <div id="contextLabels" class="context-labels"></div>
         </div>
 
         <div class="verdict-band">
           <span id="verdictBadge" class="verdict-badge">Analyzing…</span>
         </div>
+
+        <ol id="tierScale" class="tier-scale" aria-label="Risk tier">
+          <li data-tier="1">Straight</li>
+          <li data-tier="2">Likely legit</li>
+          <li data-tier="3">Borderline</li>
+          <li data-tier="4">High risk</li>
+          <li data-tier="5">Severe</li>
+        </ol>
 
         <div class="result-top">
           <div class="gauge-seal">
@@ -298,22 +352,36 @@
           <div class="verdict-block">
             <p id="resultSummary" class="result-summary"></p>
             <div class="result-meta">
-              <span id="confidenceChip" class="meta-chip">Confidence: —</span>
-              <span id="engineChip" class="meta-chip">Engine: —</span>
+              <span id="confidenceChip" class="meta-chip">Analysis confidence: —</span>
               <span id="sourceChip" class="meta-chip">Source: —</span>
+              <span id="engineChip" class="meta-chip">Engine: —</span>
+              <span id="analyzedChip" class="meta-chip">Analyzed: —</span>
             </div>
+            <ul id="confidenceNotes" class="confidence-notes" role="list"></ul>
           </div>
         </div>
 
         <div class="result-grid">
+          <article class="panel col-7">
+            <h3>The Six-Point Inspection</h3>
+            <div id="dimensionList" class="dimension-list"></div>
+          </article>
+
           <article class="panel col-5">
-            <h3>Approval Ratings</h3>
-            <div id="breakdownBars" class="bars"></div>
+            <h3>Before You Share</h3>
+            <ul id="guidanceList" class="guidance-list" role="list"></ul>
+            <h4 class="sub-head">What checks out</h4>
+            <ul id="strengthList" class="strength-list" role="list"></ul>
           </article>
 
           <article class="panel col-7">
             <h3>What Our Reporters Found</h3>
             <ul id="signalsList" class="signal-list" role="list"></ul>
+          </article>
+
+          <article class="panel col-5">
+            <h3>Claims Worth Verifying</h3>
+            <div id="claimList" class="sentence-stack"></div>
           </article>
 
           <article class="panel col-4">
@@ -342,7 +410,7 @@
           </article>
 
           <article class="panel panel-wide">
-            <h3>Pull Quotes</h3>
+            <h3>Where The Body Backs The Headline</h3>
             <div id="supportingSentenceList" class="sentence-stack"></div>
           </article>
         </div>
@@ -351,14 +419,20 @@
           <button id="analyzeAnotherBtn" class="ghost-btn" type="button">
             Set The Next Edition
           </button>
+          <button id="copyReportBtn" class="ghost-btn" type="button">Copy Report</button>
+          <button id="copyLinkBtn" class="ghost-btn" type="button">Copy Link</button>
+          <button id="printBtn" class="ghost-btn" type="button">Print</button>
         </div>
+        <p id="copyStatus" class="copy-status" role="status" aria-live="polite"></p>
 
         <p class="note">
-          This is a heuristic estimate, not a fact-check verdict. Use it as a warning signal, then
-          read critically.
+          This judges framing and sourcing, not truth. Use it as a warning signal, then read
+          critically and verify the claims it lists.
         </p>
       </section>
     </main>
+
+    <button id="toTopBtn" class="to-top hidden" type="button" aria-label="Back to top">↑</button>
 
     <footer class="site-footer">
       <div class="wrap">

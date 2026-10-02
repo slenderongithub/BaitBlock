@@ -22,15 +22,61 @@ vintage newspaper front page. It is a warning signal, **not** a fact-checker.
 ## What It Does
 
 - Fetches article HTML from a URL **server-side, with SSRF protection**.
-- **Tiered acquisition** (Node engine): direct HTTP with browser-realistic headers → AMP/RSS
-  alternate routes → headless-browser rendering → public Wayback Machine archive fallback —
-  built specifically to work around bot-walled news sites, while staying within legitimate means
-  (robots.txt-respecting, rate-limited, no CAPTCHA-solving or proxy evasion).
-- Extracts the headline, readable body text, metadata, and supporting sentences.
-- Detects clickbait patterns, sentiment intensity, and headline/body mismatch.
-- Computes a composite 0–100 risk score with an **explainable signal breakdown**.
+- **Tiered acquisition** (Node engine): direct HTTP with browser-realistic headers (retried once
+  on transient errors) → AMP/RSS alternate routes → headless-browser rendering (Playwright's
+  Chromium, or your installed Chrome/Edge) → public Wayback Machine archive — while staying within
+  legitimate means (robots.txt-respecting, rate-limited, no CAPTCHA-solving or proxy evasion).
+- **Extraction that doesn't depend on `<p>` tags**: publisher JSON-LD, paragraph selectors, and
+  Mozilla Readability (Firefox Reader View's algorithm) for sites built from `<div>`/`<span>` blocks.
+- **Never a dead end**: if a site walls off automated readers entirely, you still get a clearly
+  labelled *Headline Only* read of the link's words (15% confidence, page checks marked N/A);
+  links that genuinely don't exist get a plain 404.
+- Extracts the headline, readable body text, byline, date, publisher and page-type metadata.
+- Runs a **six-dimension inspection** (below) and returns a 0–100 risk score, a five-tier verdict
+  that **names the kind of problem** (not just "clickbait yes/no"), the exact evidence behind every
+  point, what checks out, what to verify, and what to do before sharing.
+- Highlights the exact headline words that triggered the checks, extracts people / places /
+  organizations, the sentences that back the headline, and check-worthy claims.
 - Renders a themed, accessible, front-page-dense results dashboard with a live risk gauge — light
   "Morning Edition" and dark "Evening Edition" themes.
+
+## How The Verdict Is Made
+
+Six independent checks, each scored 0–100 with every point traceable to a named signal:
+
+| Dimension | What it looks for |
+|---|---|
+| **Headline bait** | A learned headline-style model (below) plus curiosity-gap phrasing, stock bait phrases, forward references ("this", "here's"), listicles, direct address, teaser ellipses |
+| **Sensational tone** | Loaded/hyperbolic words (weighted), intensifiers, exclamation marks, ALL-CAPS, emoji; loaded-language density in the body. Quoted speech counts half |
+| **Headline vs. body** | Stemmed coverage of the headline's key terms in the body, its opening, and its best-matching passage; headline figures and names missing from the body; a headline that states as certain what the body hedges ("cures" vs "may be linked to"). The Python engine adds SBERT semantic similarity |
+| **Weak sourcing** | Attributed statements per 100 words, direct quotes, data/study references vs anonymous sourcing ("sources say", "experts warn") and rumor wording |
+| **Low transparency** | Missing byline, date or publisher, plain HTTP, sponsored/paid labels; context labels for Opinion, Press release, Satire and Old story |
+| **Manipulation & scam tactics** | Artificial urgency, sales CTAs, miracle-cure and get-rich-quick claims, conspiracy framing, share pressure, prize/verification lures, **lookalike outlet domains** (`abcnews.com.co`) |
+
+Dimensions combine as a **noisy-OR with a dead zone**: one strong red flag is enough to raise the
+score, several moderate ones compound, and faint noise across many checks doesn't add up.
+
+| Score | Tier | Verdict |
+|---|---|---|
+| 0–19 | minimal | Straight Reporting |
+| 20–39 | low | Likely Legit |
+| 40–59 | moderate | Borderline |
+| 60–79 | high | Named by the main concern: Clickbait · Sensationalist · Misleading Headline · Unsubstantiated · Low Transparency · Manipulative |
+| 80–100 | severe | (same, severe) |
+
+Satire sites and sponsored content get their own verdicts below the high tier. Each result also
+carries an **analysis confidence** (how much usable text there was), separate from the risk score.
+
+### Headline model accuracy (measured)
+
+The headline-style model is a logistic regression over unigram/bigram features, trained by
+`npm run train:headline` on the public *Stop Clickbait* corpus (Chakraborty et al., ASONAM 2016;
+16k clickbait + 16k news headlines). On a held-out 20% split (6,400 headlines, seed 42):
+**accuracy 98.2%, precision 98.5%, recall 97.8%, F1 0.981**. Weights ship in
+`src/data/headline-model.json`; the corpus itself is not committed. This measures the *headline*
+check only — there is no labelled full-article corpus here, so the article-level dimensions are
+pinned by contract tests over seven article archetypes (wire news, clickbait, misleading science,
+scam, anonymous rumor, sponsored, satire) rather than a benchmark number.
 
 ## Two Engines, One Contract
 
@@ -39,8 +85,11 @@ and serve the same frontend. Pick one:
 
 | Engine | Command | Stack | Notes |
 |---|---|---|---|
-| **Node (default)** | `npm start` | Express, Cheerio, tiered fetch pipeline, regex heuristics | Zero ML deps, starts instantly. `cosine_similarity_score` is lexical overlap. |
-| **Python (advanced)** | `./start.sh` (or `python app.py`) | Flask, spaCy, sentence-transformers, VADER | Real embeddings + NER + sentiment. `cosine_similarity_score` is a true SBERT cosine. |
+| **Node (default)** | `npm start` | Express, Cheerio, compromise (NER), tiered fetch pipeline | No ML runtime, starts instantly. `cosine_similarity_score` is stemmed lexical alignment. |
+| **Python (advanced)** | `./start.sh` (or `python app.py`) | Flask, spaCy, sentence-transformers, VADER | Adds SBERT semantic similarity + spaCy NER. `cosine_similarity_score` is a true SBERT cosine. |
+
+Both engines read the same signal definitions (`src/data/rules.json`) and headline model, so their
+verdicts agree on the contract fixtures (`tests/test_app.py` checks the Python side).
 
 Each response includes an `engine` field so the UI shows which one produced the result, and a
 `fetch_via` field (Node only) showing which acquisition tier succeeded.
@@ -60,6 +109,7 @@ npm run dev            # auto-reload (node --watch)
 npm test               # unit + integration + frontend (node:test, zero extra runtime deps)
 npm run lint           # ESLint
 npm run format          # Prettier --write
+npm run train:headline  # retrain the headline model (needs the corpus in .cache/clickbait-data)
 ```
 
 If port 3000 is busy: `lsof -ti tcp:3000 | xargs kill -9 && npm start`.
@@ -98,7 +148,7 @@ flowchart LR
    API --> SSRF[SSRF guard + timeout + size cap]
    SSRF --> ACQ[Tiered acquisition: HTTP -> AMP/RSS -> headless -> archive]
    ACQ --> EXTRACT[Headline + body + metadata]
-   EXTRACT --> SCORE[Scoring + explainable signals]
+   EXTRACT --> SCORE[Six-dimension inspection + headline model]
    SCORE --> RES[JSON result incl. engine + fetch_via]
    RES --> FE
 ```
@@ -115,11 +165,19 @@ The Node backend is modular: `config` · `ssrfGuard` · `safeFetch` · `acquire`
   is re-validated (Node).
 - **Legitimate-only acquisition**: respects `robots.txt` by default, per-domain rate limiting,
   no CAPTCHA-solving/proxy-rotation/fingerprint-spoofing.
-- **Rate limiting** on `/api/analyze` (Node, `express-rate-limit`).
+- **DNS-rebinding safe** (Node): SSRF validation runs inside the socket's DNS lookup, so the
+  address dialled is the address checked. The Python engine validates every redirect hop itself.
+- **Same-origin, JSON-only API**: cross-site POSTs (by `Origin` / `Sec-Fetch-Site`) get 403, non-JSON
+  bodies 415; no CORS headers are ever sent. This is the CSRF defence: there are no cookies or sessions.
+- **Abuse limits** (both engines): per-IP rate limiting, a server-wide cap on concurrent analyses
+  (503 when full), 4 KB request bodies, 2,048-char URLs; Node also caps concurrent headless renders.
+- **Security event log**: one JSON line per blocked SSRF attempt, cross-origin request, rate-limit
+  hit, oversized body or capacity rejection (`"type":"security"` on stderr).
 - **Request timeout + response size cap + Content-Type allowlist** on outbound fetches (both
   engines).
-- **Security headers** via Helmet with a strict CSP (all assets same-origin — fonts self-hosted,
-  no external CDN of any kind).
+- **Security headers** on both engines: HSTS, a strict CSP with no `unsafe-inline`, nosniff,
+  frame-ancestors none, Referrer-Policy, Permissions-Policy. Errors never include stack traces or
+  internal details.
 - TLS verification is always on (the Python engine no longer silently falls back to
   `verify=False`).
 
@@ -133,12 +191,14 @@ internet-facing**.
 
 Request: `{ "url": "https://example.com/article" }`
 
-Key response fields: `verdict`, `composite_sensationalism_score`, `legitimacy_confidence_score`,
-`engine`, `fetch_via`, `headline`, `body_snippet`, `signals`, `score_breakdown`,
-`cosine_similarity_score`, `sentiment_polarity`, `entity_groups`, `supporting_sentences`.
+Key response fields: `verdict`, `tier`, `risk_level`, `bucket`, `primary_concern`, `score`,
+`dimensions[]` (each with `score` and `signals[]`), `strengths`, `context_labels`, `guidance`,
+`headline_highlights`, `headline_model`, `analysis_confidence`, `claims_to_verify`,
+`supporting_sentences`, `entity_groups`, plus the legacy fields. Full contract:
+[docs/API-Documentation.md](./docs/API-Documentation.md).
 
-Errors return `{ "error": "..." }` with an appropriate status (400 invalid/blocked URL, 413 too
-large, 415 not HTML, 429 rate-limited, 502/504 upstream failure).
+Errors return `{ "error": "..." }` (400 invalid/blocked URL, 403 cross-origin, 413 body too large,
+414 URL too long, 415 not JSON / not HTML, 429 rate-limited, 502/504 upstream failure, 503 busy).
 
 Also: `GET /healthz` → `{ "status": "ok" }`.
 
@@ -148,9 +208,11 @@ Also: `GET /healthz` → `{ "status": "ok" }`.
 ClickbaitDetection/
   public/            index.html, script.js, theme.js, styles.css, robots.txt, fonts/
   src/               server.js + config, ssrfGuard, safeFetch, acquire (altRoutes, headless,
-                     archive, robots, politeness, cache), extraction, scoring, nlp, analyze,
-                     errors, textUtils, lexicons
-  tests/             node:test — scoring, ssrf, analyze, api, frontend (jsdom)
+                     archive, robots, politeness, cache), extraction, scoring, headlineModel,
+                     nlp, analyze, errors, textUtils
+  src/data/          rules.json (shared signal definitions), headline-model.json (learned weights)
+  scripts/           train-headline-model.js
+  tests/             node:test — scoring, ssrf, analyze, api, frontend (jsdom); test_app.py (Python)
   app.py             Python NLP engine (Flask)
   requirements.txt   pinned Python deps
   render.yaml        Render Blueprint (Node engine, persistent web service)
@@ -161,10 +223,12 @@ ClickbaitDetection/
 
 ## Notes
 
-- This is a heuristic estimate, not a final fact-check verdict.
-- Some sites block automated fetches outright or need JavaScript to render content — the tiered
-  acquisition pipeline recovers many of these, but a hard bot wall with no public archive copy is
-  an honest ceiling, not a bug.
+- BaitBlock judges framing and sourcing, not truth. It is a warning signal, not a fact-check.
+- The lexicons and headline model are English-only; non-English pages get a low analysis confidence.
+- Reliability, measured on live RSS links from ~30 outlets: every link returned a result; ~75%
+  were full-article reads. Hard bot walls (NYT, Forbes, Sky News, Ars Technica at the time of
+  testing) yield only a Headline Only read until a public archive copy exists. Getting past those
+  would need CAPTCHA-solving or evasion, which this project deliberately doesn't do.
 
 ## License
 

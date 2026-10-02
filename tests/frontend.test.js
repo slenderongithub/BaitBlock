@@ -72,17 +72,27 @@ test("frontend renders a full result from a real backend response", async () => 
   assert.equal(document.getElementById("verdictBadge").textContent, "Clickbait");
   assert.match(document.getElementById("headlineText").textContent, /SHOCKING secret/);
   assert.ok(
-    document.getElementById("engineChip").textContent.includes("node-heuristic"),
+    document.querySelectorAll("#headlineText mark").length > 0,
+    "flagged headline words should be highlighted"
+  );
+  assert.ok(
+    document.getElementById("engineChip").textContent.includes("node-nlp"),
     "engine chip should reflect the backend"
   );
+  assert.ok(
+    document.querySelector('#tierScale li[data-tier="5"]').classList.contains("is-active"),
+    "severe tier should be marked"
+  );
 
-  // Score breakdown bars rendered (4 rows).
-  assert.equal(document.querySelectorAll("#breakdownBars .bar-row").length, 4);
-  // At least one signal rendered.
+  // Six inspection rows, the risky ones expanded with their evidence.
+  assert.equal(document.querySelectorAll("#dimensionList details.dimension").length, 6);
+  assert.ok(document.querySelector("#dimensionList details[open] .dimension-signals li"));
+  assert.ok(document.querySelectorAll("#guidanceList li").length > 0);
   assert.ok(document.querySelectorAll("#signalsList li").length > 0);
-  // Metrics and article-info definition lists populated.
   assert.ok(document.querySelectorAll("#metricsList div").length >= 4);
   assert.ok(document.querySelectorAll("#articleInfoList div").length >= 6);
+  // Shareable deep link written after a successful run.
+  assert.match(dom.window.location.search, /\?url=https%3A%2F%2Fexample\.com%2Fnews/);
 
   dom.window.close();
 });
@@ -105,7 +115,7 @@ test("frontend shows an error banner when the API returns an error", async () =>
   window.document.body.appendChild(scriptEl);
 
   const { document } = window;
-  document.getElementById("articleUrl").value = "http://127.0.0.1/";
+  document.getElementById("articleUrl").value = "http://10.0.0.1/";
   document.getElementById("analyzeForm").dispatchEvent(new window.Event("submit"));
   await flush();
 
@@ -113,6 +123,44 @@ test("frontend shows an error banner when the API returns an error", async () =>
   assert.ok(!banner.classList.contains("hidden"), "error banner should be visible");
   assert.match(document.getElementById("errorText").textContent, /private or reserved/);
   window.close();
+});
+
+test("invalid input shows a form error state without calling the API", async () => {
+  let called = false;
+  const dom = await bootFrontend({});
+  dom.window.fetch = async () => {
+    called = true;
+    return { ok: true, json: async () => ({}) };
+  };
+  const { document } = dom.window;
+  document.getElementById("articleUrl").value = "not a url";
+  document.getElementById("analyzeForm").dispatchEvent(new dom.window.Event("submit"));
+  await flush();
+  assert.equal(called, false);
+  assert.equal(document.getElementById("articleUrl").getAttribute("aria-invalid"), "true");
+  assert.ok(document.getElementById("statusText").classList.contains("is-error"));
+  dom.window.close();
+});
+
+test("legacy (Python) responses without dimensions still render", async () => {
+  const dom = await bootFrontend({
+    verdict: "Sensationalist",
+    composite_sensationalism_score: 50,
+    headline: "Old engine headline",
+    score_breakdown: {
+      semantic_gap_points: 10,
+      sentiment_points: 20,
+      hook_points: 5,
+      synergy_points: 0,
+    },
+  });
+  const { document } = dom.window;
+  document.getElementById("articleUrl").value = "https://example.com/a";
+  document.getElementById("analyzeForm").dispatchEvent(new dom.window.Event("submit"));
+  await flush();
+  assert.ok(document.getElementById("resultCard").classList.contains("warning"));
+  assert.equal(document.querySelectorAll("#dimensionList details").length, 4);
+  dom.window.close();
 });
 
 test("theme toggle flips data-theme and persists", async () => {
